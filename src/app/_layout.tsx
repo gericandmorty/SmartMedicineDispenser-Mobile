@@ -1,18 +1,54 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
+import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useColorScheme } from 'react-native';
+import { useEffect, useState } from 'react';
+import { StatusBar } from 'expo-status-bar';
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
+try {
+  SplashScreen.preventAutoHideAsync();
+} catch {
+  // Already prevented or not available
+}
 
-SplashScreen.preventAutoHideAsync();
+export default function RootLayout() {
+  const [ready, setReady] = useState(false);
 
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
+  useEffect(() => {
+    async function prepare() {
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      } catch {
+        // ignore
+      } finally {
+        setReady(true);
+        try {
+          await SplashScreen.hideAsync();
+        } catch {
+          // Already hidden or not supported
+        }
+      }
+    }
+    prepare();
+  }, []);
+
+  if (!ready) return null;
+
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
-    </ThemeProvider>
+    <>
+      <StatusBar style="dark" />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: '#F5F0E8' },
+          animation: 'slide_from_right',
+        }}
+      >
+        {/* Tab group — renders the bottom navbar */}
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+
+        {/* Flow screens that appear on top of tabs (no navbar) */}
+        <Stack.Screen name="set-time" />
+        <Stack.Screen name="confirmation" />
+      </Stack>
+    </>
   );
 }
