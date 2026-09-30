@@ -13,7 +13,14 @@ import PrimaryButton from '../components/PrimaryButton';
 import { AmPm } from '../types/reminder';
 
 export default function SetTimeScreen() {
-  const params = useLocalSearchParams<{ hour?: string; minute?: string; amPm?: string }>();
+  const params = useLocalSearchParams<{
+    hour?: string;
+    minute?: string;
+    amPm?: string;
+    compartment?: string;
+    slotIndex?: string;
+    reminderId?: string;
+  }>();
 
   const [hour, setHour] = useState<number>(
     params.hour ? parseInt(params.hour, 10) : 8
@@ -28,7 +35,14 @@ export default function SetTimeScreen() {
   const handleSave = () => {
     router.push({
       pathname: '/confirmation',
-      params: { hour: String(hour), minute: String(minute), amPm },
+      params: {
+        hour: String(hour),
+        minute: String(minute),
+        amPm,
+        compartment: params.compartment ?? '',
+        slotIndex: params.slotIndex ?? '',
+        reminderId: params.reminderId ?? '',
+      },
     });
   };
 
@@ -48,6 +62,15 @@ export default function SetTimeScreen() {
       </View>
 
       <View style={styles.content}>
+        {params.compartment ? (
+          <View style={styles.compartmentBadge}>
+            <Ionicons name="cube" size={16} color="#1B5E20" />
+            <Text style={styles.compartmentText}>
+              Compartment: {params.compartment}
+            </Text>
+          </View>
+        ) : null}
+
         <TimePicker
           hour={hour}
           minute={minute}
@@ -110,6 +133,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
+  },
+  compartmentBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#C8E6C9',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginBottom: 20,
+    gap: 6,
+  },
+  compartmentText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1B5E20',
   },
   footer: {
     paddingHorizontal: 24,

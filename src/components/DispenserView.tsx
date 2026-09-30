@@ -6,9 +6,12 @@ import {
   Animated,
   StyleSheet,
   Dimensions,
+  Alert,
 } from 'react-native';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Reminder } from '../types/reminder';
+import { triggerHardwareDispense } from '../services/hardware';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const CABINET_W   = SCREEN_W - 32;   // 16px page padding each side
@@ -65,30 +68,55 @@ function LED({ active }: { active: boolean }) {
 }
 
 // ─── Single cell ──────────────────────────────────────────────────────────────
-function Cell({ col, row, active, reminder }: {
-  col: string; row: string; active: boolean; reminder?: Reminder;
+function Cell({
+  col,
+  row,
+  active,
+  reminder,
+  onPress,
+}: {
+  col: string;
+  row: string;
+  active: boolean;
+  reminder?: Reminder;
+  onPress: () => void;
 }) {
   const timeStr = reminder
     ? `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')}\n${reminder.amPm}`
     : '';
   return (
-    <View style={[s.cell, active && s.cellActive]}>
-      <Text style={s.cellLbl}>{col}{row}</Text>
+    <TouchableOpacity
+      style={[s.cell, active && s.cellActive]}
+      onPress={onPress}
+      activeOpacity={0.75}
+    >
+      <Text style={[s.cellLbl, active && s.cellLblActive]}>{col}{row}</Text>
       <LED active={active} />
-      {active && <Text style={s.cellTime}>{timeStr}</Text>}
-    </View>
+      {active ? (
+        <Text style={s.cellTime}>{timeStr}</Text>
+      ) : (
+        <View style={s.addIconWrap}>
+          <Ionicons name="add" size={14} color="#888" />
+        </View>
+      )}
+    </TouchableOpacity>
   );
 }
 
 // ─── Drawer ───────────────────────────────────────────────────────────────────
 const CLOSED_H = 0;
-// Grid height: rows * cell_h + dividers
 const OPEN_H = ROW_COUNT * CELL_H + DIVIDER * (ROW_COUNT + 1) + 36; // 36 for col headers
 
-function DrawerPanel({ index, reminders }: { index: number; reminders: Reminder[] }) {
-  const [open, setOpen] = useState(false);
-  const anim   = useMemo(() => new Animated.Value(CLOSED_H), []);
-  const rotate = useMemo(() => new Animated.Value(0), []);
+interface DrawerProps {
+  index: number;
+  allReminders: Reminder[];
+  onDeleteReminder?: (id: string) => void;
+}
+
+function DrawerPanel({ index, allReminders, onDeleteReminder }: DrawerProps) {
+  const [open, setOpen] = useState(index === 0); // Open Drawer 1 by default
+  const anim   = useMemo(() => new Animated.Value(index === 0 ? OPEN_H : CLOSED_H), [index]);
+  const rotate = useMemo(() => new Animated.Value(index === 0 ? 1 : 0), [index]);
 
   const toggle = () => {
     const next = !open;
@@ -101,8 +129,82 @@ function DrawerPanel({ index, reminders }: { index: number; reminders: Reminder[
 
   const chevron = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] });
 
-  const slotMap = new Map<number, Reminder>();
-  reminders.forEach((r, i) => { if (i < SLOTS) slotMap.set(i, r); });
+  // Map slots for this drawer (index 0: slots 0..11, index 1: slots 12..23)
+  const drawerBaseIndex = index * SLOTS;
+
+  // Find active count for this drawer
+  const drawerActiveCount = useMemo(() => {
+    return allReminders.filter((r) => {
+      if (r.slotIndex !== undefined) {
+        return r.slotIndex >= drawerBaseIndex && r.slotIndex < drawerBaseIndex + SLOTS;
+      }
+      if (r.compartment) {
+        return r.compartment.startsWith(`Drawer ${index + 1}`);
+      }
+      return false;
+    }).length;
+  }, [allReminders, index, drawerBaseIndex]);
+
+  const handleCellPress = (col: string, row: string, ri: number, ci: number) => {
+    const slotInDrawer = ri * COL_COUNT + ci;
+    const globalSlotIndex = drawerBaseIndex + slotInDrawer;
+    const compartmentLabel = `Drawer ${index + 1} (${col}${row})`;
+
+    // Check if slot has reminder
+    const existing = allReminders.find((r) => {
+      if (r.slotIndex !== undefined) return r.slotIndex === globalSlotIndex;
+      if (r.compartment) return r.compartment === compartmentLabel;
+      return false;
+    });
+
+    if (existing) {
+      const timeFormatted = `${String(existing.hour).padStart(2, '0')}:${String(existing.minute).padStart(2, '0')} ${existing.amPm}`;
+      Alert.alert(
+        `Compartment ${col}${row}`,
+        `Current schedule: ${timeFormatted}`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Dispense Now 💊',
+            onPress: () => {
+              triggerHardwareDispense(existing);
+            },
+          },
+          {
+            text: 'Change Time',
+            onPress: () => {
+              router.push({
+                pathname: '/set-time',
+                params: {
+                  compartment: compartmentLabel,
+                  slotIndex: String(globalSlotIndex),
+                  hour: String(existing.hour),
+                  minute: String(existing.minute),
+                  amPm: existing.amPm,
+                  reminderId: existing.id,
+                },
+              });
+            },
+          },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => {
+              if (onDeleteReminder) onDeleteReminder(existing.id);
+            },
+          },
+        ]
+      );
+    } else {
+      router.push({
+        pathname: '/set-time',
+        params: {
+          compartment: compartmentLabel,
+          slotIndex: String(globalSlotIndex),
+        },
+      });
+    }
+  };
 
   return (
     <View style={s.cabinet}>
@@ -111,7 +213,7 @@ function DrawerPanel({ index, reminders }: { index: number; reminders: Reminder[
         <View style={s.headerLeft}>
           <Ionicons name="layers-outline" size={17} color="#76FF03" style={{ marginRight: 8 }} />
           <Text style={s.headerTitle}>Drawer {index + 1}</Text>
-          <Text style={s.headerCount}>{Math.min(reminders.length, SLOTS)}/{SLOTS} active</Text>
+          <Text style={s.headerCount}>{drawerActiveCount}/{SLOTS} active</Text>
         </View>
         <Animated.View style={{ transform: [{ rotate: chevron }] }}>
           <Ionicons name="chevron-down" size={20} color="#76FF03" />
@@ -133,14 +235,24 @@ function DrawerPanel({ index, reminders }: { index: number; reminders: Reminder[
           <View key={row} style={s.gridRow}>
             <Text style={s.rowLbl}>{row}</Text>
             {COLS.map((col, ci) => {
-              const idx = ri * COL_COUNT + ci;
+              const slotInDrawer = ri * COL_COUNT + ci;
+              const globalSlotIndex = drawerBaseIndex + slotInDrawer;
+              const compartmentLabel = `Drawer ${index + 1} (${col}${row})`;
+
+              const reminder = allReminders.find((r) => {
+                if (r.slotIndex !== undefined) return r.slotIndex === globalSlotIndex;
+                if (r.compartment) return r.compartment === compartmentLabel;
+                return false;
+              });
+
               return (
                 <Cell
                   key={col}
                   col={col}
                   row={row}
-                  active={slotMap.has(idx)}
-                  reminder={slotMap.get(idx)}
+                  active={!!reminder}
+                  reminder={reminder}
+                  onPress={() => handleCellPress(col, row, ri, ci)}
                 />
               );
             })}
@@ -157,12 +269,18 @@ function DrawerPanel({ index, reminders }: { index: number; reminders: Reminder[
 }
 
 // ─── Export ───────────────────────────────────────────────────────────────────
-export default function DispenserView({ reminders }: { reminders: Reminder[] }) {
+export default function DispenserView({
+  reminders,
+  onDeleteReminder,
+}: {
+  reminders: Reminder[];
+  onDeleteReminder?: (id: string) => void;
+}) {
   return (
     <View style={{ marginBottom: 16, alignItems: 'center' }}>
-      <Text style={s.sectionLbl}>DISPENSER COMPARTMENTS</Text>
-      <DrawerPanel index={0} reminders={reminders.slice(0, SLOTS)} />
-      <DrawerPanel index={1} reminders={reminders.slice(SLOTS, SLOTS * 2)} />
+      <Text style={s.sectionLbl}>DISPENSER COMPARTMENTS (TAP CELL TO ADD)</Text>
+      <DrawerPanel index={0} allReminders={reminders} onDeleteReminder={onDeleteReminder} />
+      <DrawerPanel index={1} allReminders={reminders} onDeleteReminder={onDeleteReminder} />
     </View>
   );
 }
@@ -245,9 +363,16 @@ const s = StyleSheet.create({
     position: 'absolute', top: 6, left: 8,
     fontSize: 10, fontWeight: '700', color: '#777',
   },
+  cellLblActive: {
+    color: '#76FF03',
+  },
   cellTime: {
     fontSize: 9, fontWeight: '800', color: '#76FF03',
     textAlign: 'center', lineHeight: 12,
+  },
+  addIconWrap: {
+    marginTop: 2,
+    opacity: 0.6,
   },
 
   // Handle

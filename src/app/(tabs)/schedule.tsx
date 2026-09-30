@@ -46,7 +46,7 @@ export default function ScheduleScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ── Dispenser compartment view ── */}
-        <DispenserView reminders={reminders} />
+        <DispenserView reminders={reminders} onDeleteReminder={handleDelete} />
 
         {/* ── Divider ── */}
         {reminders.length > 0 && (

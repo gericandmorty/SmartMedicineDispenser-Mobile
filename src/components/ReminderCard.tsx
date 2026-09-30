@@ -3,6 +3,8 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Reminder } from '../types/reminder';
 
+import { triggerHardwareDispense } from '../services/hardware';
+
 interface Props {
   reminder: Reminder;
   onDelete: (id: string) => void;
@@ -22,15 +24,35 @@ export default function ReminderCard({ reminder, onDelete }: Props) {
       </View>
       <View style={styles.info}>
         <Text style={styles.time}>{formatTime(reminder)}</Text>
-        <Text style={styles.recurrence}>Every day</Text>
+        <View style={styles.badgeRow}>
+          {reminder.compartment ? (
+            <View style={styles.tag}>
+              <Ionicons name="cube-outline" size={12} color="#1B5E20" style={{ marginRight: 3 }} />
+              <Text style={styles.tagText}>{reminder.compartment}</Text>
+            </View>
+          ) : null}
+          <Text style={styles.recurrence}>Every day</Text>
+        </View>
       </View>
-      <TouchableOpacity
-        style={styles.deleteBtn}
-        onPress={() => onDelete(reminder.id)}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-      >
-        <Ionicons name="trash" size={22} color="#E53935" />
-      </TouchableOpacity>
+
+      <View style={styles.actions}>
+        <TouchableOpacity
+          style={styles.dispenseBtn}
+          onPress={() => triggerHardwareDispense(reminder)}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="flash-outline" size={18} color="#2E7D32" />
+          <Text style={styles.dispenseText}>DISPENSE</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.deleteBtn}
+          onPress={() => onDelete(reminder.id)}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="trash" size={20} color="#E53935" />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -70,7 +92,46 @@ const styles = StyleSheet.create({
   recurrence: {
     fontSize: 13,
     color: '#757575',
-    marginTop: 2,
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    gap: 8,
+  },
+  tag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#C8E6C9',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  tagText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1B5E20',
+  },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  dispenseBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#A5D6A7',
+  },
+  dispenseText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#2E7D32',
   },
   deleteBtn: {
     padding: 6,

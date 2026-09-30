@@ -23,11 +23,28 @@ export async function saveReminders(reminders: Reminder[]): Promise<void> {
 
 export async function addReminder(reminder: Reminder): Promise<Reminder[]> {
   const existing = await loadReminders();
-  // Prevent duplicate times
+  // 1. If updating an existing ID:
+  const existingIdIdx = existing.findIndex((r) => r.id === reminder.id);
+  if (existingIdIdx >= 0) {
+    existing[existingIdIdx] = reminder;
+    await saveReminders(existing);
+    return existing;
+  }
+  // 2. If slotIndex is set and slot already has a reminder, replace it:
+  if (reminder.slotIndex !== undefined) {
+    const existingSlotIdx = existing.findIndex((r) => r.slotIndex === reminder.slotIndex);
+    if (existingSlotIdx >= 0) {
+      existing[existingSlotIdx] = reminder;
+      await saveReminders(existing);
+      return existing;
+    }
+  }
+  // 3. Prevent exact duplicate times
   const isDuplicate = existing.some(
     (r) => r.hour === reminder.hour && r.minute === reminder.minute && r.amPm === reminder.amPm
   );
   if (isDuplicate) return existing;
+
   const updated = [...existing, reminder];
   await saveReminders(updated);
   return updated;
