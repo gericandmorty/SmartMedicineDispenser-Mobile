@@ -13,13 +13,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { Reminder } from '../types/reminder';
 import { triggerHardwareDispense } from '../services/hardware';
 
-const { width: SCREEN_W } = Dimensions.get('window');
-const CABINET_W   = SCREEN_W - 32;   // 16px page padding each side
-const CELL_H      = 90;               // generous cell height
-const ROW_LABEL_W = 22;
+const CELL_H      = 86;               // Cell height
+const ROW_LABEL_W = 20;
 const COL_COUNT   = 4;
 const ROW_COUNT   = 3;
-const DIVIDER     = 6;                // gap between cells (acts as wall)
+const DIVIDER     = 6;                // gap between cells
 const SLOTS       = COL_COUNT * ROW_COUNT; // 12
 
 const COLS = ['A', 'B', 'C', 'D'];
@@ -35,7 +33,7 @@ function LED({ active }: { active: boolean }) {
     ringO.setValue(0.5);
     const anim = Animated.loop(
       Animated.sequence([
-        Animated.timing(ring,  { toValue: 2.4, duration: 850, useNativeDriver: true }),
+        Animated.timing(ring,  { toValue: 2.2, duration: 850, useNativeDriver: true }),
         Animated.timing(ring,  { toValue: 1,   duration: 850, useNativeDriver: true }),
       ])
     );
@@ -43,7 +41,7 @@ function LED({ active }: { active: boolean }) {
     return () => anim.stop();
   }, [active, ring, ringO]);
 
-  const DOT = 12;
+  const DOT = 10;
   return (
     <View style={{ width: DOT, height: DOT, alignItems: 'center', justifyContent: 'center' }}>
       <Animated.View style={{
@@ -55,12 +53,11 @@ function LED({ active }: { active: boolean }) {
       }} />
       <View style={{
         width: DOT, height: DOT, borderRadius: DOT / 2,
-        backgroundColor: active ? '#76FF03' : '#4A4A4A',
-        position: 'absolute',
+        backgroundColor: active ? '#76FF03' : '#555555',
         shadowColor: active ? '#76FF03' : 'transparent',
         shadowOffset: { width: 0, height: 0 },
         shadowOpacity: active ? 0.9 : 0,
-        shadowRadius: 6,
+        shadowRadius: 5,
         elevation: active ? 4 : 0,
       }} />
     </View>
@@ -82,7 +79,7 @@ function Cell({
   onPress: () => void;
 }) {
   const timeStr = reminder
-    ? `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')}\n${reminder.amPm}`
+    ? `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')} ${reminder.amPm}`
     : '';
   return (
     <TouchableOpacity
@@ -90,13 +87,16 @@ function Cell({
       onPress={onPress}
       activeOpacity={0.75}
     >
-      <Text style={[s.cellLbl, active && s.cellLblActive]}>{col}{row}</Text>
-      <LED active={active} />
+      <View style={s.cellHeader}>
+        <Text style={[s.cellLbl, active && s.cellLblActive]}>{col}{row}</Text>
+        <LED active={active} />
+      </View>
+
       {active ? (
-        <Text style={s.cellTime}>{timeStr}</Text>
+        <Text style={s.cellTime} numberOfLines={2}>{timeStr}</Text>
       ) : (
         <View style={s.addIconWrap}>
-          <Ionicons name="add" size={14} color="#888" />
+          <Ionicons name="add" size={14} color="#777" />
         </View>
       )}
     </TouchableOpacity>
@@ -277,7 +277,7 @@ export default function DispenserView({
   onDeleteReminder?: (id: string) => void;
 }) {
   return (
-    <View style={{ marginBottom: 16, alignItems: 'center' }}>
+    <View style={{ marginBottom: 16, width: '100%' }}>
       <Text style={s.sectionLbl}>DISPENSER COMPARTMENTS (TAP CELL TO ADD)</Text>
       <DrawerPanel index={0} allReminders={reminders} onDeleteReminder={onDeleteReminder} />
       <DrawerPanel index={1} allReminders={reminders} onDeleteReminder={onDeleteReminder} />
@@ -295,10 +295,10 @@ const s = StyleSheet.create({
 
   // Cabinet body
   cabinet: {
-    width: CABINET_W,
+    width: '100%',
     backgroundColor: '#363636',
-    borderRadius: 14,
-    marginBottom: 12,
+    borderRadius: 16,
+    marginBottom: 14,
     overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
@@ -348,31 +348,39 @@ const s = StyleSheet.create({
     flex: 1,
     height: CELL_H,
     marginHorizontal: DIVIDER / 2,
-    backgroundColor: '#4C4C4C',
+    backgroundColor: '#444444',
     borderRadius: 10,
+    padding: 6,
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
+    justifyContent: 'space-between',
+  },
+  cellHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
   },
   cellActive: {
-    backgroundColor: '#0D2B0D',
+    backgroundColor: '#0A290C',
     borderWidth: 1.5,
     borderColor: '#4CAF50',
   },
   cellLbl: {
-    position: 'absolute', top: 6, left: 8,
-    fontSize: 10, fontWeight: '700', color: '#777',
+    fontSize: 10, fontWeight: '700', color: '#888',
   },
   cellLblActive: {
     color: '#76FF03',
   },
   cellTime: {
-    fontSize: 9, fontWeight: '800', color: '#76FF03',
-    textAlign: 'center', lineHeight: 12,
+    fontSize: 10, fontWeight: '800', color: '#76FF03',
+    textAlign: 'center',
+    lineHeight: 13,
+    marginBottom: 4,
   },
   addIconWrap: {
-    marginTop: 2,
-    opacity: 0.6,
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   // Handle
