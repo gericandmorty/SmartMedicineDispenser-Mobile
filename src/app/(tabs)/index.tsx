@@ -12,6 +12,9 @@ import { useReminders } from '../../hooks/useReminders';
 import ReminderCard from '../../components/ReminderCard';
 import PrimaryButton from '../../components/PrimaryButton';
 
+import { TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+
 export default function HomeScreen() {
   const { reminders, loading, refresh, remove } = useReminders();
 
@@ -35,7 +38,15 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
+        <View style={styles.placeholder} />
         <Text style={styles.title}>My Medicine</Text>
+        <TouchableOpacity
+          style={styles.settingsBtn}
+          onPress={() => router.push('/settings')}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="settings-outline" size={22} color="#212121" />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -77,13 +88,22 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#F5F0E8' },
   header: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 20,
-    paddingHorizontal: 24,
+    justifyContent: 'space-between',
+    paddingTop: 16,
+    paddingHorizontal: 20,
     paddingBottom: 8,
   },
+  placeholder: { width: 32 },
+  settingsBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   title: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '800',
     color: '#212121',
     letterSpacing: 0.2,
@@ -91,7 +111,7 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: {
     flexGrow: 1,
-    paddingHorizontal: 24,
+    paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 20,
   },
