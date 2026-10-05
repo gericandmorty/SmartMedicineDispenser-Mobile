@@ -8,4 +8,6 @@ export interface Reminder {
   recurrence: 'every-day';
   notificationId?: string;
   createdAt: string; // ISO string
+  compartment?: string; // e.g. "Drawer 1 - A1"
+  slotIndex?: number;   // 0-23
 }
