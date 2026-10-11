@@ -17,7 +17,14 @@ const scaleAnim = new Animated.Value(0.8);
 const opacityAnim = new Animated.Value(0);
 
 export default function ConfirmationScreen() {
-  const params = useLocalSearchParams<{ hour: string; minute: string; amPm: string }>();
+  const params = useLocalSearchParams<{
+    hour: string;
+    minute: string;
+    amPm: string;
+    compartment?: string;
+    slotIndex?: string;
+    reminderId?: string;
+  }>();
   const hour = parseInt(params.hour ?? '8', 10);
   const minute = parseInt(params.minute ?? '0', 10);
   const amPm = (params.amPm ?? 'AM') as AmPm;
@@ -53,17 +60,23 @@ export default function ConfirmationScreen() {
     setSaving(true);
 
     const reminder: Reminder = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      id: params.reminderId && params.reminderId.trim() !== ''
+        ? params.reminderId
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       hour,
       minute,
       amPm,
       recurrence: 'every-day',
       createdAt: new Date().toISOString(),
+      compartment: params.compartment || undefined,
+      slotIndex: params.slotIndex !== undefined && params.slotIndex !== ''
+        ? parseInt(params.slotIndex, 10)
+        : undefined,
     };
 
     await add(reminder);
     router.replace('/(tabs)/schedule');
-  }, [saving, hour, minute, amPm, add]);
+  }, [saving, hour, minute, amPm, params.reminderId, params.compartment, params.slotIndex, add]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -75,7 +88,9 @@ export default function ConfirmationScreen() {
         </View>
 
         <Text style={styles.heading}>Time Saved!</Text>
-        <Text style={styles.subtitle}>The dispenser will remind you at:</Text>
+        <Text style={styles.subtitle}>
+          {params.compartment ? `Dispenser ${params.compartment} set for:` : 'The dispenser will remind you at:'}
+        </Text>
 
         <View style={styles.timeBox}>
           <Text style={styles.timeText}>{formattedTime}</Text>
