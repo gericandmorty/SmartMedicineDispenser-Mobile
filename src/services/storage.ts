@@ -30,18 +30,33 @@ export async function addReminder(reminder: Reminder): Promise<Reminder[]> {
     await saveReminders(existing);
     return existing;
   }
-  // 2. If slotIndex is set and slot already has a reminder, replace it:
-  if (reminder.slotIndex !== undefined) {
-    const existingSlotIdx = existing.findIndex((r) => r.slotIndex === reminder.slotIndex);
+  // 2. If compartment or slotIndex is set and already has a reminder on the same date, replace it:
+  if (reminder.compartment) {
+    const existingCompIdx = existing.findIndex(
+      (r) => r.compartment === reminder.compartment && (r.date ?? '') === (reminder.date ?? '')
+    );
+    if (existingCompIdx >= 0) {
+      existing[existingCompIdx] = reminder;
+      await saveReminders(existing);
+      return existing;
+    }
+  } else if (reminder.slotIndex !== undefined) {
+    const existingSlotIdx = existing.findIndex(
+      (r) => r.slotIndex === reminder.slotIndex && (r.date ?? '') === (reminder.date ?? '')
+    );
     if (existingSlotIdx >= 0) {
       existing[existingSlotIdx] = reminder;
       await saveReminders(existing);
       return existing;
     }
   }
-  // 3. Prevent exact duplicate times
+  // 3. Prevent exact duplicate times on the same date
   const isDuplicate = existing.some(
-    (r) => r.hour === reminder.hour && r.minute === reminder.minute && r.amPm === reminder.amPm
+    (r) =>
+      r.hour === reminder.hour &&
+      r.minute === reminder.minute &&
+      r.amPm === reminder.amPm &&
+      (r.date ?? '') === (reminder.date ?? '')
   );
   if (isDuplicate) return existing;
 

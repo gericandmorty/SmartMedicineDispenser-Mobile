@@ -16,6 +16,22 @@ function formatTime(r: Reminder): string {
   return `${h}:${m} ${r.amPm}`;
 }
 
+function formatDateLabel(dateStr?: string): string {
+  if (!dateStr) return 'Every day';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
+
+  if (dateStr === todayStr) return 'Today';
+  if (dateStr === tomorrowStr) return 'Tomorrow';
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 export default function ReminderCard({ reminder, onDelete }: Props) {
   return (
     <View style={styles.card}>
@@ -31,7 +47,15 @@ export default function ReminderCard({ reminder, onDelete }: Props) {
               <Text style={styles.tagText}>{reminder.compartment}</Text>
             </View>
           ) : null}
-          <Text style={styles.recurrence}>Every day</Text>
+
+          {reminder.date ? (
+            <View style={styles.dateTag}>
+              <Ionicons name="calendar-outline" size={12} color="#1565C0" style={{ marginRight: 3 }} />
+              <Text style={styles.dateTagText}>{formatDateLabel(reminder.date)}</Text>
+            </View>
+          ) : (
+            <Text style={styles.recurrence}>Every day</Text>
+          )}
         </View>
       </View>
 
@@ -113,6 +137,21 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: '#1B5E20',
+  },
+  dateTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E3F2FD',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 0.5,
+    borderColor: '#90CAF9',
+  },
+  dateTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#1565C0',
   },
   actions: {
     flexDirection: 'row',

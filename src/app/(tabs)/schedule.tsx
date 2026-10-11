@@ -44,6 +44,7 @@ export default function ScheduleScreen() {
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         {/* ── Dispenser compartment view ── */}
         <DispenserView reminders={reminders} onDeleteReminder={handleDelete} />

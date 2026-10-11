@@ -8,6 +8,12 @@ import {
 
 function sortReminders(data: Reminder[]): Reminder[] {
   return [...data].sort((a, b) => {
+    // If both have specific dates, sort by date first
+    if (a.date && b.date && a.date !== b.date) {
+      return a.date.localeCompare(b.date);
+    }
+    // Specific dates before daily recurrence or vice versa?
+    // Keep recurring and specific organized, then sort by time:
     const toMins = (r: Reminder) => {
       let h = r.hour;
       if (r.amPm === 'AM' && r.hour === 12) h = 0;

@@ -16,11 +16,24 @@ import { AmPm, Reminder } from '../types/reminder';
 const scaleAnim = new Animated.Value(0.8);
 const opacityAnim = new Animated.Value(0);
 
+function formatDateFull(dateStr?: string): string {
+  if (!dateStr || dateStr.trim() === '') return 'Every day (Repeating)';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
 export default function ConfirmationScreen() {
   const params = useLocalSearchParams<{
     hour: string;
     minute: string;
     amPm: string;
+    date?: string;
     compartment?: string;
     slotIndex?: string;
     reminderId?: string;
@@ -53,6 +66,7 @@ export default function ConfirmationScreen() {
   }, []);
 
   const formattedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${amPm}`;
+  const hasDate = params.date && params.date.trim() !== '';
 
   const handleDone = useCallback(async () => {
     if (savedRef.current || saving) return;
@@ -66,7 +80,8 @@ export default function ConfirmationScreen() {
       hour,
       minute,
       amPm,
-      recurrence: 'every-day',
+      recurrence: hasDate ? 'once' : 'every-day',
+      date: hasDate ? params.date : undefined,
       createdAt: new Date().toISOString(),
       compartment: params.compartment || undefined,
       slotIndex: params.slotIndex !== undefined && params.slotIndex !== ''
@@ -76,7 +91,7 @@ export default function ConfirmationScreen() {
 
     await add(reminder);
     router.replace('/(tabs)/schedule');
-  }, [saving, hour, minute, amPm, params.reminderId, params.compartment, params.slotIndex, add]);
+  }, [saving, hour, minute, amPm, hasDate, params.date, params.reminderId, params.compartment, params.slotIndex, add]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -87,13 +102,22 @@ export default function ConfirmationScreen() {
           <Ionicons name="checkmark" size={64} color="#fff" />
         </View>
 
-        <Text style={styles.heading}>Time Saved!</Text>
+        <Text style={styles.heading}>Schedule Saved!</Text>
         <Text style={styles.subtitle}>
           {params.compartment ? `Dispenser ${params.compartment} set for:` : 'The dispenser will remind you at:'}
         </Text>
 
         <View style={styles.timeBox}>
           <Text style={styles.timeText}>{formattedTime}</Text>
+          <View style={styles.dateBadge}>
+            <Ionicons
+              name={hasDate ? 'calendar' : 'repeat'}
+              size={15}
+              color="#1B5E20"
+              style={{ marginRight: 6 }}
+            />
+            <Text style={styles.dateText}>{formatDateFull(params.date)}</Text>
+          </View>
         </View>
       </Animated.View>
 
@@ -153,13 +177,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#C8E6C9',
     borderRadius: 16,
     paddingVertical: 20,
-    paddingHorizontal: 48,
+    paddingHorizontal: 36,
+    alignItems: 'center',
   },
   timeText: {
     fontSize: 36,
     fontWeight: '800',
     color: '#212121',
     letterSpacing: 1,
+  },
+  dateBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#A5D6A7',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginTop: 10,
+  },
+  dateText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1B5E20',
   },
   footer: {
     paddingHorizontal: 24,

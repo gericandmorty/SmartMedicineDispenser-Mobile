@@ -12,14 +12,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { Reminder } from '../types/reminder';
 import { triggerHardwareDispense } from '../services/hardware';
 
-const CELL_H      = 86;               // Cell height
-const ROW_LABEL_W = 20;
-const COL_COUNT   = 4;
+const CELL_H      = 74;               // Cell height
+const ROW_LABEL_W = 16;
+const COL_COUNT   = 7;
 const ROW_COUNT   = 3;
-const DIVIDER     = 6;                // gap between cells
-const SLOTS       = COL_COUNT * ROW_COUNT; // 12
+const DIVIDER     = 3;                // gap between cells
+const SLOTS       = COL_COUNT * ROW_COUNT; // 21 slots per drawer
 
-const COLS = ['A', 'B', 'C', 'D'];
+const COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 const ROWS = ['1', '2', '3'];
 
 // ─── Pulsing LED ─────────────────────────────────────────────────────────────
@@ -40,9 +40,9 @@ function LED({ active }: { active: boolean }) {
     return () => anim.stop();
   }, [active, ring, ringO]);
 
-  const DOT = 10;
+  const DOT = 8;
   return (
-    <View style={{ width: DOT, height: DOT, alignItems: 'center', justifyContent: 'center' }}>
+    <View style={{ width: DOT, height: DOT, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
       <Animated.View style={{
         position: 'absolute',
         width: DOT, height: DOT, borderRadius: DOT / 2,
@@ -56,8 +56,8 @@ function LED({ active }: { active: boolean }) {
         shadowColor: active ? '#76FF03' : 'transparent',
         shadowOffset: { width: 0, height: 0 },
         shadowOpacity: active ? 0.9 : 0,
-        shadowRadius: 5,
-        elevation: active ? 4 : 0,
+        shadowRadius: 4,
+        elevation: active ? 3 : 0,
       }} />
     </View>
   );
@@ -78,24 +78,33 @@ function Cell({
   onPress: () => void;
 }) {
   const timeStr = reminder
-    ? `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')} ${reminder.amPm}`
+    ? `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')}`
     : '';
+  const amPm = reminder?.amPm ?? '';
+
   return (
     <TouchableOpacity
       style={[s.cell, active && s.cellActive]}
       onPress={onPress}
-      activeOpacity={0.75}
+      activeOpacity={0.7}
+      delayPressIn={0}
+      hitSlop={{ top: 4, bottom: 4, left: 1, right: 1 }}
+      accessibilityRole="button"
+      accessibilityLabel={`Compartment ${col}${row}`}
     >
-      <View style={s.cellHeader}>
+      <View style={s.cellHeader} pointerEvents="none">
         <Text style={[s.cellLbl, active && s.cellLblActive]}>{col}{row}</Text>
         <LED active={active} />
       </View>
 
       {active ? (
-        <Text style={s.cellTime} numberOfLines={2}>{timeStr}</Text>
+        <View style={s.cellBody} pointerEvents="none">
+          <Text style={s.cellTime} numberOfLines={1}>{timeStr}</Text>
+          <Text style={s.cellAmPm} numberOfLines={1}>{amPm}</Text>
+        </View>
       ) : (
-        <View style={s.addIconWrap}>
-          <Ionicons name="add" size={14} color="#777" />
+        <View style={s.addIconWrap} pointerEvents="none">
+          <Ionicons name="add" size={12} color="#777" />
         </View>
       )}
     </TouchableOpacity>
@@ -104,7 +113,8 @@ function Cell({
 
 // ─── Drawer ───────────────────────────────────────────────────────────────────
 const CLOSED_H = 0;
-const OPEN_H = ROW_COUNT * CELL_H + DIVIDER * (ROW_COUNT + 1) + 36; // 36 for col headers
+// Generous height to prevent clipping on any Android screen density
+const OPEN_H = ROW_COUNT * CELL_H + DIVIDER * (ROW_COUNT + 1) + 48;
 
 interface DrawerProps {
   index: number;
@@ -128,17 +138,17 @@ function DrawerPanel({ index, allReminders, onDeleteReminder }: DrawerProps) {
 
   const chevron = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] });
 
-  // Map slots for this drawer (index 0: slots 0..11, index 1: slots 12..23)
+  // Map slots for this drawer (index 0: slots 0..20, index 1: slots 21..41)
   const drawerBaseIndex = index * SLOTS;
 
   // Find active count for this drawer
   const drawerActiveCount = useMemo(() => {
     return allReminders.filter((r) => {
-      if (r.slotIndex !== undefined) {
-        return r.slotIndex >= drawerBaseIndex && r.slotIndex < drawerBaseIndex + SLOTS;
-      }
       if (r.compartment) {
         return r.compartment.startsWith(`Drawer ${index + 1}`);
+      }
+      if (r.slotIndex !== undefined) {
+        return r.slotIndex >= drawerBaseIndex && r.slotIndex < drawerBaseIndex + SLOTS;
       }
       return false;
     }).length;
@@ -149,18 +159,19 @@ function DrawerPanel({ index, allReminders, onDeleteReminder }: DrawerProps) {
     const globalSlotIndex = drawerBaseIndex + slotInDrawer;
     const compartmentLabel = `Drawer ${index + 1} (${col}${row})`;
 
-    // Check if slot has reminder
+    // Check if slot has reminder (match compartment label first)
     const existing = allReminders.find((r) => {
-      if (r.slotIndex !== undefined) return r.slotIndex === globalSlotIndex;
       if (r.compartment) return r.compartment === compartmentLabel;
+      if (r.slotIndex !== undefined) return r.slotIndex === globalSlotIndex;
       return false;
     });
 
     if (existing) {
       const timeFormatted = `${String(existing.hour).padStart(2, '0')}:${String(existing.minute).padStart(2, '0')} ${existing.amPm}`;
+      const dateInfo = existing.date ? `\nDate: ${existing.date}` : '\nRepeat: Every day';
       Alert.alert(
         `Compartment ${col}${row}`,
-        `Current schedule: ${timeFormatted}`,
+        `Current schedule: ${timeFormatted}${dateInfo}`,
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -180,6 +191,7 @@ function DrawerPanel({ index, allReminders, onDeleteReminder }: DrawerProps) {
                   hour: String(existing.hour),
                   minute: String(existing.minute),
                   amPm: existing.amPm,
+                  date: existing.date ?? '',
                   reminderId: existing.id,
                 },
               });
@@ -219,8 +231,8 @@ function DrawerPanel({ index, allReminders, onDeleteReminder }: DrawerProps) {
         </Animated.View>
       </TouchableOpacity>
 
-      {/* Expandable grid */}
-      <Animated.View style={{ height: anim, overflow: 'hidden' }}>
+      {/* Expandable grid with visible overflow when open for flawless Android touch response */}
+      <Animated.View style={{ height: anim, overflow: open ? 'visible' : 'hidden' }}>
         {/* Column letters */}
         <View style={s.colRow}>
           <View style={{ width: ROW_LABEL_W }} />
@@ -239,8 +251,8 @@ function DrawerPanel({ index, allReminders, onDeleteReminder }: DrawerProps) {
               const compartmentLabel = `Drawer ${index + 1} (${col}${row})`;
 
               const reminder = allReminders.find((r) => {
-                if (r.slotIndex !== undefined) return r.slotIndex === globalSlotIndex;
                 if (r.compartment) return r.compartment === compartmentLabel;
+                if (r.slotIndex !== undefined) return r.slotIndex === globalSlotIndex;
                 return false;
               });
 
@@ -319,14 +331,14 @@ const s = StyleSheet.create({
   // Column headers
   colRow: {
     flexDirection: 'row',
-    paddingTop: 10,
+    paddingTop: 8,
     paddingBottom: 4,
     paddingHorizontal: DIVIDER,
   },
   colLbl: {
     flex: 1,
     textAlign: 'center',
-    fontSize: 13, fontWeight: '800', color: '#76FF03', letterSpacing: 0.8,
+    fontSize: 11, fontWeight: '800', color: '#76FF03', letterSpacing: 0.5,
   },
 
   // Grid rows
@@ -339,7 +351,7 @@ const s = StyleSheet.create({
   rowLbl: {
     width: ROW_LABEL_W,
     textAlign: 'center',
-    fontSize: 13, fontWeight: '800', color: '#76FF03',
+    fontSize: 11, fontWeight: '800', color: '#76FF03',
   },
 
   // Cell
@@ -348,8 +360,8 @@ const s = StyleSheet.create({
     height: CELL_H,
     marginHorizontal: DIVIDER / 2,
     backgroundColor: '#444444',
-    borderRadius: 10,
-    padding: 6,
+    borderRadius: 8,
+    padding: 3,
     alignItems: 'center',
     justifyContent: 'space-between',
   },
@@ -358,6 +370,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     width: '100%',
+    paddingHorizontal: 2,
   },
   cellActive: {
     backgroundColor: '#0A290C',
@@ -365,16 +378,25 @@ const s = StyleSheet.create({
     borderColor: '#4CAF50',
   },
   cellLbl: {
-    fontSize: 10, fontWeight: '700', color: '#888',
+    fontSize: 8.5, fontWeight: '700', color: '#888',
   },
   cellLblActive: {
     color: '#76FF03',
   },
-  cellTime: {
-    fontSize: 10, fontWeight: '800', color: '#76FF03',
-    textAlign: 'center',
-    lineHeight: 13,
+  cellBody: {
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 4,
+  },
+  cellTime: {
+    fontSize: 8.5, fontWeight: '800', color: '#76FF03',
+    textAlign: 'center',
+    lineHeight: 11,
+  },
+  cellAmPm: {
+    fontSize: 7.5, fontWeight: '700', color: '#4CAF50',
+    textAlign: 'center',
+    marginTop: 1,
   },
   addIconWrap: {
     flex: 1,

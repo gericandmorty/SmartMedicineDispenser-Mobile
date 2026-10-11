@@ -41,15 +41,13 @@ export function getRelayNumber(compartment?: string, slotIndex?: number): number
   }
 
   if (compartment) {
-    const upper = compartment.toUpperCase();
-    if (upper.includes('A1')) return 1;
-    if (upper.includes('A2')) return 2;
-    if (upper.includes('B1')) return 3;
-    if (upper.includes('B2')) return 4;
-    if (upper.includes('C1')) return 1;
-    if (upper.includes('C2')) return 2;
-    if (upper.includes('D1')) return 3;
-    if (upper.includes('D2')) return 4;
+    const match = compartment.toUpperCase().match(/([A-G])([1-3])/);
+    if (match) {
+      const colIdx = match[1].charCodeAt(0) - 'A'.charCodeAt(0);
+      const rowIdx = parseInt(match[2], 10) - 1;
+      const slot = rowIdx * 7 + colIdx;
+      return (slot % 4) + 1;
+    }
   }
 
   return 1;
