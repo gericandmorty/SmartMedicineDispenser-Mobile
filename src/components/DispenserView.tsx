@@ -5,7 +5,6 @@ import {
   TouchableOpacity,
   Animated,
   StyleSheet,
-  Dimensions,
   Alert,
 } from 'react-native';
 import { router } from 'expo-router';

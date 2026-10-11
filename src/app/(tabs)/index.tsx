@@ -6,13 +6,12 @@ import {
   ScrollView,
   SafeAreaView,
   Alert,
+  TouchableOpacity,
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { useReminders } from '../../hooks/useReminders';
 import ReminderCard from '../../components/ReminderCard';
 import PrimaryButton from '../../components/PrimaryButton';
-
-import { TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function HomeScreen() {

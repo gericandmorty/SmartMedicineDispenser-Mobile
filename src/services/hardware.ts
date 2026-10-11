@@ -129,7 +129,7 @@ export async function triggerHardwareDispense(reminder: Reminder): Promise<void>
         [{ text: 'OK' }]
       );
     }
-  } catch (error) {
+  } catch {
     clearTimeout(timeoutId);
     Alert.alert(
       '📡 Wi-Fi Dispensing Signal',
