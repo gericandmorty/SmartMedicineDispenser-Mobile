@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Smart Medicine Dispenser",
-    "slug": "smart-medicine-dispenser",
+    "slug": "medicine-reminder",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",

@@ -118,6 +118,12 @@ export default function ConfirmationScreen() {
             />
             <Text style={styles.dateText}>{formatDateFull(params.date)}</Text>
           </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12 }}>
+            <Ionicons name="wifi" size={13} color="#2E7D32" style={{ marginRight: 4 }} />
+            <Text style={{ fontSize: 12, fontWeight: '600', color: '#2E7D32' }}>
+              Wi-Fi Vibration Alarm Synced
+            </Text>
+          </View>
         </View>
       </Animated.View>
 

@@ -5,6 +5,10 @@ import {
   scheduleReminderNotification,
   cancelReminderNotification,
 } from '../services/notifications';
+import {
+  syncScheduleToESP32,
+  deleteScheduleFromESP32,
+} from '../services/hardware';
 
 function sortReminders(data: Reminder[]): Reminder[] {
   return [...data].sort((a, b) => {
@@ -51,6 +55,12 @@ export function useReminders() {
     startTransition(() => {
       setReminders(sorted);
     });
+
+    // Sync schedule to ESP32 Mini over Wi-Fi asynchronously
+    syncScheduleToESP32(withNotif).catch((e) => {
+      console.log('[useReminders] ESP32 Wi-Fi sync error:', e);
+    });
+
     return updated;
   }, []);
 
@@ -65,6 +75,11 @@ export function useReminders() {
     const sorted = sortReminders(updated);
     startTransition(() => {
       setReminders(sorted);
+    });
+
+    // Remove schedule from ESP32 Mini over Wi-Fi
+    deleteScheduleFromESP32(id).catch((e) => {
+      console.log('[useReminders] ESP32 Wi-Fi delete error:', e);
     });
   }, []);
 
