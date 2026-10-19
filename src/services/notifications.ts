@@ -77,18 +77,42 @@ export async function scheduleReminderNotification(reminder: Reminder): Promise<
       if (reminder.hour !== 12) hour24 = reminder.hour + 12;
     }
 
-    const id = await scheduleNotificationAsync({
-      content: {
-        title: '💊 Medicine Reminder',
-        body: "It's time for your scheduled medicine reminder.",
-        sound: true,
-      },
-      trigger: {
+    const bodyText = reminder.compartment
+      ? `It's time to take your medicine from ${reminder.compartment}.`
+      : "It's time for your scheduled medicine reminder.";
+
+    let triggerInput: any;
+
+    if (reminder.date) {
+      const [y, m, d] = reminder.date.split('-').map(Number);
+      const targetDate = new Date(y, m - 1, d, hour24, reminder.minute, 0);
+
+      // Only schedule if it's in the future
+      if (targetDate.getTime() > Date.now()) {
+        triggerInput = {
+          type: SchedulableTriggerInputTypes.DATE,
+          date: targetDate,
+          channelId: Platform.OS === 'android' ? DEFAULT_CHANNEL_ID : undefined,
+        };
+      } else {
+        return undefined;
+      }
+    } else {
+      triggerInput = {
         type: SchedulableTriggerInputTypes.DAILY,
         hour: hour24,
         minute: reminder.minute,
         channelId: Platform.OS === 'android' ? DEFAULT_CHANNEL_ID : undefined,
+      };
+    }
+
+    const id = await scheduleNotificationAsync({
+      content: {
+        title: '💊 Medicine Reminder',
+        body: bodyText,
+        sound: true,
       },
+      trigger: triggerInput,
     });
     return id;
   } catch (e) {

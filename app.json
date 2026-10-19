@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Medicine Reminder",
+    "name": "Smart Medicine Dispenser",
     "slug": "medicine-reminder",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -35,6 +35,13 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "bde0c310-a373-4e73-a35b-092fdcb6f249"
+      }
+    },
+    "owner": "gericandmorty"
   }
 }

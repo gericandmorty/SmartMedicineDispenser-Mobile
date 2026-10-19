@@ -15,6 +15,7 @@ import {
   getArduinoIP,
   saveArduinoIP,
   pingArduino,
+  triggerVibrateESP32,
   DEFAULT_ARDUINO_IP,
 } from '../../services/hardware';
 
@@ -23,6 +24,7 @@ export default function SettingsScreen() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [arduinoIp, setArduinoIp] = useState(DEFAULT_ARDUINO_IP);
   const [pinging, setPinging] = useState(false);
+  const [vibrating, setVibrating] = useState(false);
 
   useEffect(() => {
     getArduinoIP().then(setArduinoIp);
@@ -30,7 +32,7 @@ export default function SettingsScreen() {
 
   const handleSaveIp = async () => {
     await saveArduinoIP(arduinoIp);
-    Alert.alert('IP Saved', `Arduino IP updated to: ${arduinoIp}`);
+    Alert.alert('IP Saved', `Device IP updated to: ${arduinoIp}`);
   };
 
   const handleTestConnection = async () => {
@@ -38,11 +40,25 @@ export default function SettingsScreen() {
     const success = await pingArduino(arduinoIp);
     setPinging(false);
     if (success) {
-      Alert.alert('✅ Wi-Fi Connection Success', `Successfully connected to Arduino at ${arduinoIp}`);
+      Alert.alert('✅ Wi-Fi Connection Success', `Successfully connected to ESP32 / Arduino at ${arduinoIp}`);
     } else {
       Alert.alert(
         '⚠️ Wi-Fi Connection Failed',
-        `Could not reach Arduino at ${arduinoIp}.\n\nEnsure:\n1. Arduino and phone are on the same Wi-Fi.\n2. IP matches LCD screen display.`
+        `Could not reach hardware at ${arduinoIp}.\n\nEnsure:\n1. Device and phone are on the same Wi-Fi.\n2. IP address is correct.`
+      );
+    }
+  };
+
+  const handleTestVibrate = async () => {
+    setVibrating(true);
+    const success = await triggerVibrateESP32(2500, 3);
+    setVibrating(false);
+    if (success) {
+      Alert.alert('📳 Vibration Signal Sent', `ESP32 at ${arduinoIp} should now be vibrating!`);
+    } else {
+      Alert.alert(
+        '⚠️ Could Not Trigger Vibration',
+        `Could not send vibration command to ${arduinoIp}.\nMake sure the ESP32 is powered on and connected to the same Wi-Fi.`
       );
     }
   };
@@ -113,7 +129,7 @@ export default function SettingsScreen() {
                 style={styles.ipInput}
                 value={arduinoIp}
                 onChangeText={setArduinoIp}
-                placeholder="192.168.1.100"
+                placeholder="192.168.1.23"
                 keyboardType="numeric"
                 autoCapitalize="none"
               />
@@ -138,6 +154,22 @@ export default function SettingsScreen() {
               />
               <Text style={styles.testBtnText}>
                 {pinging ? 'Testing Connection...' : 'Test Wi-Fi Connection'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.testBtn, { backgroundColor: '#FFF3E0', borderColor: '#FFE0B2', marginTop: 8 }]}
+              onPress={handleTestVibrate}
+              disabled={vibrating}
+            >
+              <Ionicons
+                name="phone-portrait-outline"
+                size={18}
+                color="#E65100"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.testBtnText, { color: '#E65100' }]}>
+                {vibrating ? 'Sending Vibration...' : '📳 Test ESP32 Vibration Motor'}
               </Text>
             </TouchableOpacity>
           </View>

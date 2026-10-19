@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Reminder } from '../types/reminder';
 
 const ARDUINO_IP_KEY = '@arduino_wifi_ip';
-export const DEFAULT_ARDUINO_IP = '192.168.1.17';
+export const DEFAULT_ARDUINO_IP = '192.168.1.23';
 
 /**
  * Get stored Arduino IP address from AsyncStorage
@@ -41,15 +41,13 @@ export function getRelayNumber(compartment?: string, slotIndex?: number): number
   }
 
   if (compartment) {
-    const upper = compartment.toUpperCase();
-    if (upper.includes('A1')) return 1;
-    if (upper.includes('A2')) return 2;
-    if (upper.includes('B1')) return 3;
-    if (upper.includes('B2')) return 4;
-    if (upper.includes('C1')) return 1;
-    if (upper.includes('C2')) return 2;
-    if (upper.includes('D1')) return 3;
-    if (upper.includes('D2')) return 4;
+    const match = compartment.toUpperCase().match(/([A-G])([1-3])/);
+    if (match) {
+      const colIdx = match[1].charCodeAt(0) - 'A'.charCodeAt(0);
+      const rowIdx = parseInt(match[2], 10) - 1;
+      const slot = rowIdx * 7 + colIdx;
+      return (slot % 4) + 1;
+    }
   }
 
   return 1;
@@ -136,5 +134,78 @@ export async function triggerHardwareDispense(reminder: Reminder): Promise<void>
       `Sent Wi-Fi command to http://${arduinoIP}/dispense?relay=${relayNum}\n\nFor ${compartmentName} (Relay ${relayNum}).\nMake sure your phone and Arduino are on the same Wi-Fi network.`,
       [{ text: 'OK' }]
     );
+  }
+}
+
+/**
+ * Sync schedule to ESP32 Mini over Wi-Fi
+ */
+export async function syncScheduleToESP32(reminder: Reminder): Promise<boolean> {
+  const ip = await getArduinoIP();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+  try {
+    const params = new URLSearchParams({
+      id: reminder.id,
+      hour: String(reminder.hour),
+      minute: String(reminder.minute),
+      amPm: reminder.amPm,
+      date: reminder.date || '',
+      compartment: reminder.compartment || '',
+      slotIndex: String(reminder.slotIndex ?? 0),
+    });
+
+    const res = await fetch(`http://${ip}/set-schedule?${params.toString()}`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return res.ok;
+  } catch {
+    clearTimeout(timeoutId);
+    return false;
+  }
+}
+
+/**
+ * Delete schedule from ESP32 Mini over Wi-Fi
+ */
+export async function deleteScheduleFromESP32(reminderId: string): Promise<boolean> {
+  const ip = await getArduinoIP();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+  try {
+    const res = await fetch(`http://${ip}/delete-schedule?id=${encodeURIComponent(reminderId)}`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return res.ok;
+  } catch {
+    clearTimeout(timeoutId);
+    return false;
+  }
+}
+
+/**
+ * Trigger immediate vibration on ESP32 Mini over Wi-Fi
+ */
+export async function triggerVibrateESP32(durationMs: number = 2500, pulses: number = 3): Promise<boolean> {
+  const ip = await getArduinoIP();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+  try {
+    const res = await fetch(`http://${ip}/vibrate?duration=${durationMs}&pulses=${pulses}`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return res.ok;
+  } catch {
+    clearTimeout(timeoutId);
+    return false;
   }
 }

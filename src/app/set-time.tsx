@@ -5,18 +5,29 @@ import {
   StyleSheet,
   SafeAreaView,
   TouchableOpacity,
+  ScrollView,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import TimePicker from '../components/TimePicker';
+import DatePicker from '../components/DatePicker';
 import PrimaryButton from '../components/PrimaryButton';
 import { AmPm } from '../types/reminder';
+
+function getTodayString(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 export default function SetTimeScreen() {
   const params = useLocalSearchParams<{
     hour?: string;
     minute?: string;
     amPm?: string;
+    date?: string;
     compartment?: string;
     slotIndex?: string;
     reminderId?: string;
@@ -31,6 +42,9 @@ export default function SetTimeScreen() {
   const [amPm, setAmPm] = useState<AmPm>(
     (params.amPm as AmPm) ?? 'AM'
   );
+  const [date, setDate] = useState<string | undefined>(
+    params.date !== undefined && params.date !== '' ? params.date : getTodayString()
+  );
 
   const handleSave = () => {
     router.push({
@@ -39,6 +53,7 @@ export default function SetTimeScreen() {
         hour: String(hour),
         minute: String(minute),
         amPm,
+        date: date ?? '',
         compartment: params.compartment ?? '',
         slotIndex: params.slotIndex ?? '',
         reminderId: params.reminderId ?? '',
@@ -57,11 +72,16 @@ export default function SetTimeScreen() {
         >
           <Ionicons name="arrow-back" size={24} color="#212121" />
         </TouchableOpacity>
-        <Text style={styles.title}>Set Time</Text>
+        <Text style={styles.title}>Set Schedule</Text>
         <View style={styles.placeholder} />
       </View>
 
-      <View style={styles.content}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         {params.compartment ? (
           <View style={styles.compartmentBadge}>
             <Ionicons name="cube" size={16} color="#1B5E20" />
@@ -79,11 +99,16 @@ export default function SetTimeScreen() {
           onMinuteChange={setMinute}
           onAmPmChange={setAmPm}
         />
-      </View>
+
+        <DatePicker
+          selectedDate={date}
+          onDateChange={setDate}
+        />
+      </ScrollView>
 
       <View style={styles.footer}>
         <PrimaryButton
-          label="SAVE"
+          label="SAVE SCHEDULE"
           onPress={handleSave}
           color="#1976D2"
           icon="save-outline"
@@ -127,6 +152,15 @@ const styles = StyleSheet.create({
   },
   placeholder: {
     width: 40,
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 24,
   },
   content: {
     flex: 1,
