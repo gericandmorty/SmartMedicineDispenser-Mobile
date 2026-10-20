@@ -166,4 +166,31 @@ export async function scheduleRestockNotification(
   }
 }
 
+/**
+ * Fires an immediate local push notification alerting that a medicine column is out of stock
+ */
+export async function triggerImmediateRestockNotification(
+  drawer: number,
+  column: string
+): Promise<string | undefined> {
+  try {
+    const granted = await requestPermissions();
+    if (!granted) return undefined;
+
+    const id = await scheduleNotificationAsync({
+      content: {
+        title: '📦 Medicine Restock Required',
+        body: `Drawer ${drawer} - Column ${column} is out of stock! It's time to refill your weekly medicine supply.`,
+        sound: true,
+      },
+      trigger: null, // triggers immediately
+    });
+    return id;
+  } catch (e) {
+    console.warn('[notifications] Failed to trigger immediate restock notification:', e);
+    return undefined;
+  }
+}
+
+
 

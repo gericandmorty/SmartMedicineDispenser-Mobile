@@ -8,6 +8,8 @@ import {
   getPendingSyncReminders,
   loadDoseHistory,
   recordDoseResolution,
+  seedPhasedOutMedicineData,
+  clearAllMedicineData,
 } from '../services/storage';
 import {
   scheduleReminderNotification,
@@ -40,10 +42,16 @@ export function useReminders() {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const [remData, histData] = await Promise.all([
-      loadReminders(),
-      loadDoseHistory(),
-    ]);
+    let remData = await loadReminders();
+    let histData = await loadDoseHistory();
+
+    // Auto-seed 0/7 doses phased out data on initial fresh start
+    if (remData.length === 0 && histData.length === 0) {
+      await seedPhasedOutMedicineData();
+      remData = await loadReminders();
+      histData = await loadDoseHistory();
+    }
+
     const sorted = sortReminders(remData);
     startTransition(() => {
       setReminders(sorted);
@@ -134,6 +142,16 @@ export function useReminders() {
     []
   );
 
+  const seedPhasedOut = useCallback(async () => {
+    await seedPhasedOutMedicineData();
+    await refresh();
+  }, [refresh]);
+
+  const clearAll = useCallback(async () => {
+    await clearAllMedicineData();
+    await refresh();
+  }, [refresh]);
+
   return {
     reminders,
     doseHistory,
@@ -143,5 +161,7 @@ export function useReminders() {
     add,
     remove,
     resolveDose,
+    seedPhasedOut,
+    clearAll,
   };
 }

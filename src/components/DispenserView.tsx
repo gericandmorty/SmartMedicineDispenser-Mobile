@@ -25,7 +25,7 @@ const COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 const ROWS = ['1', '2', '3'];
 
 // ─── Pulsing LED ─────────────────────────────────────────────────────────────
-function LED({ active }: { active: boolean }) {
+function LED({ active, isOutOfStock }: { active: boolean; isOutOfStock?: boolean }) {
   const ring  = useMemo(() => new Animated.Value(1), []);
   const ringO = useMemo(() => new Animated.Value(0), []);
 
@@ -43,19 +43,22 @@ function LED({ active }: { active: boolean }) {
   }, [active, ring, ringO]);
 
   const DOT = 8;
+  const pulseColor = isOutOfStock ? '#EF4444' : '#4CAF50';
+  const dotColor = isOutOfStock ? '#FF5252' : '#76FF03';
+
   return (
     <View style={{ width: DOT, height: DOT, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
       <Animated.View style={{
         position: 'absolute',
         width: DOT, height: DOT, borderRadius: DOT / 2,
-        backgroundColor: '#4CAF50',
+        backgroundColor: pulseColor,
         transform: [{ scale: ring }],
         opacity: ringO,
       }} />
       <View style={{
         width: DOT, height: DOT, borderRadius: DOT / 2,
-        backgroundColor: active ? '#76FF03' : '#555555',
-        shadowColor: active ? '#76FF03' : 'transparent',
+        backgroundColor: active ? dotColor : '#555555',
+        shadowColor: active ? dotColor : 'transparent',
         shadowOffset: { width: 0, height: 0 },
         shadowOpacity: active ? 0.9 : 0,
         shadowRadius: 4,
@@ -70,12 +73,14 @@ function Cell({
   col,
   row,
   active,
+  isOutOfStock,
   reminder,
   onPress,
 }: {
   col: string;
   row: string;
   active: boolean;
+  isOutOfStock?: boolean;
   reminder?: Reminder;
   onPress: () => void;
 }) {
@@ -86,23 +91,49 @@ function Cell({
 
   return (
     <TouchableOpacity
-      style={[s.cell, active && s.cellActive]}
+      style={[
+        s.cell,
+        active && (isOutOfStock ? s.cellOutOfStock : s.cellActive),
+      ]}
       onPress={onPress}
       activeOpacity={0.7}
       delayPressIn={0}
       hitSlop={{ top: 4, bottom: 4, left: 1, right: 1 }}
       accessibilityRole="button"
-      accessibilityLabel={`Compartment ${col}${row}`}
+      accessibilityLabel={`Compartment ${col}${row}${isOutOfStock ? ' (Out of stock)' : ''}`}
     >
       <View style={s.cellHeader} pointerEvents="none">
-        <Text style={[s.cellLbl, active && s.cellLblActive]}>{col}{row}</Text>
-        <LED active={active} />
+        <Text
+          style={[
+            s.cellLbl,
+            active && (isOutOfStock ? s.cellLblOutOfStock : s.cellLblActive),
+          ]}
+        >
+          {col}{row}
+        </Text>
+        <LED active={active} isOutOfStock={isOutOfStock} />
       </View>
 
       {active ? (
         <View style={s.cellBody} pointerEvents="none">
-          <Text style={s.cellTime} numberOfLines={1}>{timeStr}</Text>
-          <Text style={s.cellAmPm} numberOfLines={1}>{amPm}</Text>
+          <Text
+            style={[
+              s.cellTime,
+              isOutOfStock && s.cellTimeOutOfStock,
+            ]}
+            numberOfLines={1}
+          >
+            {timeStr}
+          </Text>
+          <Text
+            style={[
+              s.cellAmPm,
+              isOutOfStock && s.cellAmPmOutOfStock,
+            ]}
+            numberOfLines={1}
+          >
+            {isOutOfStock ? 'EMPTY' : amPm}
+          </Text>
         </View>
       ) : (
         <View style={s.addIconWrap} pointerEvents="none">
@@ -131,11 +162,12 @@ export interface CompartmentScheduleParams {
 interface DrawerProps {
   index: number;
   allReminders: Reminder[];
+  doseHistory?: DoseEvent[];
   onOpenSetSchedule?: (params: CompartmentScheduleParams) => void;
   onSelectCell: (drawerIndex: number, col: string, row: string, reminder: Reminder) => void;
 }
 
-function DrawerPanel({ index, allReminders, onOpenSetSchedule, onSelectCell }: DrawerProps) {
+function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSelectCell }: DrawerProps) {
   const [open, setOpen] = useState(index === 0); // Open Drawer 1 by default
   const anim   = useMemo(() => new Animated.Value(index === 0 ? OPEN_H : CLOSED_H), [index]);
   const rotate = useMemo(() => new Animated.Value(index === 0 ? 1 : 0), [index]);
@@ -238,12 +270,17 @@ function DrawerPanel({ index, allReminders, onOpenSetSchedule, onSelectCell }: D
                 return false;
               });
 
+              const isOutOfStock = reminder
+                ? calculateColumnStock(reminder, doseHistory).isOutOfStock
+                : false;
+
               return (
                 <Cell
                   key={col}
                   col={col}
                   row={row}
                   active={!!reminder}
+                  isOutOfStock={isOutOfStock}
                   reminder={reminder}
                   onPress={() => handleCellPress(col, row, ri, ci)}
                 />
@@ -293,12 +330,14 @@ export default function DispenserView({
       <DrawerPanel
         index={0}
         allReminders={reminders}
+        doseHistory={doseHistory}
         onOpenSetSchedule={onOpenSetSchedule}
         onSelectCell={(d, c, r, rem) => setSelectedCell({ drawerIndex: d, col: c, row: r, reminder: rem })}
       />
       <DrawerPanel
         index={1}
         allReminders={reminders}
+        doseHistory={doseHistory}
         onOpenSetSchedule={onOpenSetSchedule}
         onSelectCell={(d, c, r, rem) => setSelectedCell({ drawerIndex: d, col: c, row: r, reminder: rem })}
       />
@@ -420,11 +459,19 @@ const s = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#4CAF50',
   },
+  cellOutOfStock: {
+    backgroundColor: '#2D0A0A',
+    borderWidth: 1.5,
+    borderColor: '#EF4444',
+  },
   cellLbl: {
     fontSize: 8.5, fontWeight: '700', color: '#888',
   },
   cellLblActive: {
     color: '#76FF03',
+  },
+  cellLblOutOfStock: {
+    color: '#FCA5A5',
   },
   cellBody: {
     alignItems: 'center',
@@ -436,10 +483,18 @@ const s = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 11,
   },
+  cellTimeOutOfStock: {
+    color: '#FF6B6B',
+  },
   cellAmPm: {
     fontSize: 7.5, fontWeight: '700', color: '#4CAF50',
     textAlign: 'center',
     marginTop: 1,
+  },
+  cellAmPmOutOfStock: {
+    color: '#EF4444',
+    fontSize: 7,
+    fontWeight: '800',
   },
   addIconWrap: {
     flex: 1,

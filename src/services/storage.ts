@@ -13,36 +13,68 @@ import {
   calculateColumnStock,
   extractCompartmentCoords,
 } from './medicationLogic';
+import {
+  sqliteLoadReminders,
+  sqliteSaveReminder,
+  sqliteDeleteReminder,
+  sqliteUpdateSyncStatus,
+  sqliteLoadDoseHistory,
+  sqliteRecordDoseEvent,
+  sqliteLoadColumnRefills,
+  sqliteRecordColumnRefill,
+  sqliteClearAll,
+} from './sqliteStorage';
+import { triggerImmediateRestockNotification } from './notifications';
 
 const REMINDERS_STORAGE_KEY = '@medicine_reminders';
 const DOSE_HISTORY_STORAGE_KEY = '@medicine_dose_history';
+const COLUMN_REFILLS_STORAGE_KEY = '@medicine_column_refills';
 
 /**
- * Load all stored reminders
+ * Load all stored reminders from SQLite (with AsyncStorage fallback/sync)
  */
 export async function loadReminders(): Promise<Reminder[]> {
   try {
+    const sqliteData = await sqliteLoadReminders();
+    if (sqliteData && sqliteData.length > 0) {
+      return sqliteData;
+    }
+    // If SQLite is empty, check AsyncStorage for migration
     const json = await AsyncStorage.getItem(REMINDERS_STORAGE_KEY);
-    if (!json) return [];
-    return JSON.parse(json) as Reminder[];
-  } catch {
+    if (json) {
+      const items = JSON.parse(json) as Reminder[];
+      for (const item of items) {
+        await sqliteSaveReminder(item).catch(() => {});
+      }
+      return items;
+    }
     return [];
+  } catch {
+    try {
+      const json = await AsyncStorage.getItem(REMINDERS_STORAGE_KEY);
+      return json ? (JSON.parse(json) as Reminder[]) : [];
+    } catch {
+      return [];
+    }
   }
 }
 
 /**
- * Save reminders array
+ * Save reminders array to both SQLite and AsyncStorage
  */
 export async function saveReminders(reminders: Reminder[]): Promise<void> {
   try {
+    for (const r of reminders) {
+      await sqliteSaveReminder(r).catch(() => {});
+    }
+  } catch {}
+  try {
     await AsyncStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(reminders));
-  } catch {
-    // silently fail
-  }
+  } catch {}
 }
 
 /**
- * Add or update a reminder, maintaining sync status
+ * Add or update a reminder in SQLite and AsyncStorage
  */
 export async function addReminder(reminder: Reminder): Promise<Reminder[]> {
   const existing = await loadReminders();
@@ -55,12 +87,7 @@ export async function addReminder(reminder: Reminder): Promise<Reminder[]> {
   const existingIdIdx = existing.findIndex((r) => r.id === reminder.id);
   if (existingIdIdx >= 0) {
     existing[existingIdIdx] = reminderWithSync;
-    await saveReminders(existing);
-    return existing;
-  }
-
-  // 2. If compartment or slotIndex is set and already has a reminder on the same date, replace it:
-  if (reminder.compartment) {
+  } else if (reminder.compartment) {
     const existingCompIdx = existing.findIndex(
       (r) =>
         r.compartment?.trim().toLowerCase() === reminder.compartment?.trim().toLowerCase() &&
@@ -68,8 +95,8 @@ export async function addReminder(reminder: Reminder): Promise<Reminder[]> {
     );
     if (existingCompIdx >= 0) {
       existing[existingCompIdx] = reminderWithSync;
-      await saveReminders(existing);
-      return existing;
+    } else {
+      existing.push(reminderWithSync);
     }
   } else if (reminder.slotIndex !== undefined) {
     const existingSlotIdx = existing.findIndex(
@@ -77,24 +104,37 @@ export async function addReminder(reminder: Reminder): Promise<Reminder[]> {
     );
     if (existingSlotIdx >= 0) {
       existing[existingSlotIdx] = reminderWithSync;
-      await saveReminders(existing);
-      return existing;
+    } else {
+      existing.push(reminderWithSync);
     }
+  } else {
+    existing.push(reminderWithSync);
   }
 
-  // 3. Append as new reminder
-  const updated = [...existing, reminderWithSync];
-  await saveReminders(updated);
-  return updated;
+  // SQLite write
+  try {
+    await sqliteSaveReminder(reminderWithSync);
+  } catch (e) {
+    console.warn('[storage] SQLite add failed:', e);
+  }
+
+  // AsyncStorage mirror
+  await AsyncStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(existing)).catch(() => {});
+  return existing;
 }
 
 /**
  * Delete a reminder by ID
  */
 export async function deleteReminder(id: string): Promise<Reminder[]> {
+  try {
+    await sqliteDeleteReminder(id);
+  } catch (e) {
+    console.warn('[storage] SQLite delete failed:', e);
+  }
   const existing = await loadReminders();
   const updated = existing.filter((r) => r.id !== id);
-  await saveReminders(updated);
+  await AsyncStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(updated)).catch(() => {});
   return updated;
 }
 
@@ -105,11 +145,14 @@ export async function markReminderSyncStatus(
   id: string,
   syncStatus: ScheduleConfigState
 ): Promise<Reminder[]> {
+  try {
+    await sqliteUpdateSyncStatus(id, syncStatus);
+  } catch (e) {
+    console.warn('[storage] SQLite update syncStatus failed:', e);
+  }
   const existing = await loadReminders();
-  const updated = existing.map((r) =>
-    r.id === id ? { ...r, syncStatus } : r
-  );
-  await saveReminders(updated);
+  const updated = existing.map((r) => (r.id === id ? { ...r, syncStatus } : r));
+  await AsyncStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(updated)).catch(() => {});
   return updated;
 }
 
@@ -122,15 +165,30 @@ export async function getPendingSyncReminders(): Promise<Reminder[]> {
 }
 
 /**
- * Load all recorded dose history logs
+ * Load all recorded dose history logs from SQLite
  */
 export async function loadDoseHistory(): Promise<DoseEvent[]> {
   try {
+    const sqliteHistory = await sqliteLoadDoseHistory();
+    if (sqliteHistory && sqliteHistory.length > 0) {
+      return sqliteHistory;
+    }
     const json = await AsyncStorage.getItem(DOSE_HISTORY_STORAGE_KEY);
-    if (!json) return [];
-    return JSON.parse(json) as DoseEvent[];
-  } catch {
+    if (json) {
+      const items = JSON.parse(json) as DoseEvent[];
+      for (const item of items) {
+        await sqliteRecordDoseEvent(item).catch(() => {});
+      }
+      return items;
+    }
     return [];
+  } catch {
+    try {
+      const json = await AsyncStorage.getItem(DOSE_HISTORY_STORAGE_KEY);
+      return json ? (JSON.parse(json) as DoseEvent[]) : [];
+    } catch {
+      return [];
+    }
   }
 }
 
@@ -139,10 +197,13 @@ export async function loadDoseHistory(): Promise<DoseEvent[]> {
  */
 export async function saveDoseHistory(history: DoseEvent[]): Promise<void> {
   try {
+    for (const item of history) {
+      await sqliteRecordDoseEvent(item).catch(() => {});
+    }
+  } catch {}
+  try {
     await AsyncStorage.setItem(DOSE_HISTORY_STORAGE_KEY, JSON.stringify(history));
-  } catch {
-    // silently fail
-  }
+  } catch {}
 }
 
 /**
@@ -173,40 +234,65 @@ export async function recordDoseResolution(
     elapsedSeconds,
   };
 
-  // Replace existing log for same schedule & date if already present, or append
+  // SQLite write
+  try {
+    await sqliteRecordDoseEvent(event);
+  } catch (e) {
+    console.warn('[storage] SQLite record dose failed:', e);
+  }
+
+  // AsyncStorage write
   const existingIdx = history.findIndex(
     (h) => h.scheduleId === reminder.id && h.triggerDate === triggerDate
   );
-
   if (existingIdx >= 0) {
     history[existingIdx] = event;
   } else {
-    history.unshift(event); // newest first
+    history.unshift(event);
+  }
+  const trimmed = history.slice(0, 100);
+  await AsyncStorage.setItem(DOSE_HISTORY_STORAGE_KEY, JSON.stringify(trimmed)).catch(() => {});
+
+  // If dose was taken, check if column is now out of stock (0/7 remaining)
+  if (resolution === 'TAKEN' || resolution === 'TAKEN_MANUAL') {
+    try {
+      const coords = extractCompartmentCoords(reminder.compartment, reminder.slotIndex);
+      const refillMap = await loadColumnRefills();
+      const key = `${coords.drawer}_${coords.column}`;
+      const refillDate = refillMap[key];
+      const stock = calculateColumnStock(reminder, trimmed, 7, refillDate);
+      if (stock.isOutOfStock) {
+        await triggerImmediateRestockNotification(coords.drawer, coords.column);
+      }
+    } catch {}
   }
 
-  // Keep up to 100 history entries
-  const trimmed = history.slice(0, 100);
-  await saveDoseHistory(trimmed);
   return event;
 }
 
-const COLUMN_REFILLS_STORAGE_KEY = '@medicine_column_refills';
-
 /**
- * Load refill dates map: key is `${drawer}_${column}` e.g. "1_A" -> "2026-10-20"
+ * Load refill dates map from SQLite: key is `${drawer}_${column}` e.g. "1_A" -> "2026-10-20"
  */
 export async function loadColumnRefills(): Promise<Record<string, string>> {
   try {
+    const sqliteRefills = await sqliteLoadColumnRefills();
+    if (sqliteRefills && Object.keys(sqliteRefills).length > 0) {
+      return sqliteRefills;
+    }
     const json = await AsyncStorage.getItem(COLUMN_REFILLS_STORAGE_KEY);
-    if (!json) return {};
-    return JSON.parse(json) as Record<string, string>;
+    return json ? (JSON.parse(json) as Record<string, string>) : {};
   } catch {
-    return {};
+    try {
+      const json = await AsyncStorage.getItem(COLUMN_REFILLS_STORAGE_KEY);
+      return json ? (JSON.parse(json) as Record<string, string>) : {};
+    } catch {
+      return {};
+    }
   }
 }
 
 /**
- * Record that a column has been restocked/refilled
+ * Record that a column has been restocked/refilled in SQLite
  */
 export async function recordColumnRefill(
   drawer: number,
@@ -214,13 +300,16 @@ export async function recordColumnRefill(
   dateStr: string = formatDateLocal(new Date())
 ): Promise<void> {
   try {
+    await sqliteRecordColumnRefill(drawer, column, dateStr);
+  } catch (e) {
+    console.warn('[storage] SQLite column refill failed:', e);
+  }
+  try {
     const map = await loadColumnRefills();
     const key = `${drawer}_${column.toUpperCase()}`;
     map[key] = dateStr;
     await AsyncStorage.setItem(COLUMN_REFILLS_STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    // silently fail
-  }
+  } catch {}
 }
 
 /**
@@ -250,3 +339,62 @@ export async function getColumnStockList(cycleDays: number = 7): Promise<ColumnS
   return results;
 }
 
+/**
+ * Directly seeds phased-out (0/7 doses remaining) test data into SQLite
+ */
+export async function seedPhasedOutMedicineData(): Promise<{
+  reminder: Reminder;
+  historyCount: number;
+}> {
+  const today = new Date();
+  const sevenDaysAgo = new Date(today);
+  sevenDaysAgo.setDate(today.getDate() - 7);
+  const baselineStr = formatDateLocal(sevenDaysAgo);
+
+  const demoReminder: Reminder = {
+    id: 'demo_phased_out_colA',
+    hour: 8,
+    minute: 30,
+    amPm: 'AM',
+    recurrence: 'every-day',
+    compartment: 'Drawer 1 (A1)',
+    slotIndex: 0,
+    syncStatus: 'ACTIVE',
+    createdAt: `${baselineStr}T08:30:00.000Z`,
+  };
+
+  await addReminder(demoReminder);
+  await recordColumnRefill(1, 'A', baselineStr);
+
+  // Insert 7 doses taken (one for each past day from baseline to today)
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const dateStr = formatDateLocal(d);
+
+    await recordDoseResolution(
+      demoReminder,
+      'TAKEN',
+      new Date(`${dateStr}T08:35:00`).getTime()
+    );
+  }
+
+  // Fire the out of stock push notification
+  await triggerImmediateRestockNotification(1, 'A').catch(() => {});
+
+  return { reminder: demoReminder, historyCount: 7 };
+}
+
+/**
+ * Clear all SQLite & AsyncStorage data
+ */
+export async function clearAllMedicineData(): Promise<void> {
+  try {
+    await sqliteClearAll();
+  } catch {}
+  await AsyncStorage.multiRemove([
+    REMINDERS_STORAGE_KEY,
+    DOSE_HISTORY_STORAGE_KEY,
+    COLUMN_REFILLS_STORAGE_KEY,
+  ]).catch(() => {});
+}

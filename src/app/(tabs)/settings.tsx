@@ -18,6 +18,11 @@ import {
   triggerVibrateESP32,
   DEFAULT_ARDUINO_IP,
 } from '../../services/hardware';
+import {
+  seedPhasedOutMedicineData,
+  recordColumnRefill,
+  clearAllMedicineData,
+} from '../../services/storage';
 
 export default function SettingsScreen() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
@@ -61,6 +66,37 @@ export default function SettingsScreen() {
         `Could not send vibration command to ${arduinoIp}.\nMake sure the ESP32 is powered on and connected to the same Wi-Fi.`
       );
     }
+  };
+
+  const handleSeedPhasedOut = async () => {
+    await seedPhasedOutMedicineData();
+    Alert.alert(
+      '📦 0/7 Doses Inserted & Push Notification Sent',
+      'Drawer 1 Column A now has 0/7 doses remaining.\n\nA push notification was triggered to your phone\'s notification bar!'
+    );
+  };
+
+  const handleResetStock = async () => {
+    await recordColumnRefill(1, 'A');
+    Alert.alert('🔄 Stock Reset', 'Drawer 1 Column A refilled to 7/7 doses.');
+  };
+
+  const handleClearDatabase = async () => {
+    Alert.alert(
+      'Clear SQLite Database',
+      'Are you sure you want to clear all reminders and history from the SQLite database?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear All',
+          style: 'destructive',
+          onPress: async () => {
+            await clearAllMedicineData();
+            Alert.alert('Database Cleared', 'All reminders and dose history have been cleared.');
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -170,6 +206,50 @@ export default function SettingsScreen() {
               />
               <Text style={[styles.testBtnText, { color: '#E65100' }]}>
                 {vibrating ? 'Sending Vibration...' : '📳 Test ESP32 Vibration Motor'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* ── SQLite Database & Stock Simulation ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>SQLite Database & Stock Simulation</Text>
+          <View style={styles.ipCard}>
+            <Text style={styles.settingLabel}>Medicine Stock Simulation</Text>
+            <Text style={styles.settingDesc}>
+              Insert mock history to test the 0/7 doses "Out of Stock" notification, red badges, and refilled flow directly in SQLite.
+            </Text>
+
+            <TouchableOpacity
+              style={[styles.testBtn, { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' }]}
+              onPress={handleSeedPhasedOut}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="flask-outline" size={17} color="#B91C1C" style={{ marginRight: 8 }} />
+              <Text style={[styles.testBtnText, { color: '#B91C1C' }]}>
+                Insert 0/7 Doses (Phased Out Demo)
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.testBtn, { marginTop: 8 }]}
+              onPress={handleResetStock}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="refresh" size={17} color="#1B5E20" style={{ marginRight: 8 }} />
+              <Text style={styles.testBtnText}>
+                Reset Column A to 7/7 Doses
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.testBtn, { backgroundColor: '#F3F4F6', borderColor: '#E5E7EB', marginTop: 8 }]}
+              onPress={handleClearDatabase}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="trash-outline" size={17} color="#4B5563" style={{ marginRight: 8 }} />
+              <Text style={[styles.testBtnText, { color: '#4B5563' }]}>
+                Clear All SQLite Records
               </Text>
             </TouchableOpacity>
           </View>
