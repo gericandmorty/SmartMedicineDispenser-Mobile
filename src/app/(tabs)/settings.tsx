@@ -9,14 +9,21 @@ import {
   TextInput,
   TouchableOpacity,
   Alert,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import {
   getArduinoIP,
   saveArduinoIP,
+  getESP32IP,
+  saveESP32IP,
   pingArduino,
+  pingESP32,
   triggerVibrateESP32,
+  triggerBuzzerRelayTest,
   DEFAULT_ARDUINO_IP,
+  DEFAULT_ESP32_IP,
+  sanitizeIP,
 } from '../../services/hardware';
 import {
   seedPhasedOutMedicineData,
@@ -28,42 +35,101 @@ export default function SettingsScreen() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [arduinoIp, setArduinoIp] = useState(DEFAULT_ARDUINO_IP);
-  const [pinging, setPinging] = useState(false);
+  const [esp32Ip, setEsp32Ip] = useState(DEFAULT_ESP32_IP);
+  const [pingingArduino, setPingingArduino] = useState(false);
+  const [pingingEsp32, setPingingEsp32] = useState(false);
   const [vibrating, setVibrating] = useState(false);
+  const [buzzing, setBuzzing] = useState(false);
+  const [arduinoStatus, setArduinoStatus] = useState<string | null>(null);
+  const [esp32Status, setEsp32Status] = useState<string | null>(null);
 
   useEffect(() => {
     getArduinoIP().then(setArduinoIp);
+    getESP32IP().then(setEsp32Ip);
   }, []);
 
-  const handleSaveIp = async () => {
-    await saveArduinoIP(arduinoIp);
-    Alert.alert('IP Saved', `Device IP updated to: ${arduinoIp}`);
+  const handleSaveArduinoIp = async () => {
+    const cleaned = sanitizeIP(arduinoIp, DEFAULT_ARDUINO_IP);
+    setArduinoIp(cleaned);
+    await saveArduinoIP(cleaned);
+    setArduinoStatus(`Saved: ${cleaned}`);
+    Alert.alert('Arduino IP Saved', `Arduino IP updated to: ${cleaned}`);
   };
 
-  const handleTestConnection = async () => {
-    setPinging(true);
-    const success = await pingArduino(arduinoIp);
-    setPinging(false);
+  const handleSaveEsp32Ip = async () => {
+    const cleaned = sanitizeIP(esp32Ip, DEFAULT_ESP32_IP);
+    setEsp32Ip(cleaned);
+    await saveESP32IP(cleaned);
+    setEsp32Status(`Saved: ${cleaned}`);
+    Alert.alert('ESP32-Mini IP Saved', `ESP32-Mini IP updated to: ${cleaned}`);
+  };
+
+  const handleTestArduinoConnection = async () => {
+    const cleaned = sanitizeIP(arduinoIp, DEFAULT_ARDUINO_IP);
+    setArduinoIp(cleaned);
+    setPingingArduino(true);
+    setArduinoStatus(`Testing http://${cleaned}/ping ...`);
+    const result = await pingArduino(cleaned);
+    setPingingArduino(false);
+    if (result.ok) {
+      setArduinoStatus(`✅ Connected to http://${cleaned}`);
+      Alert.alert('✅ Arduino Connected', `Successfully connected to Arduino at ${cleaned}`);
+    } else {
+      setArduinoStatus(`❌ Failed: ${result.error || 'Network error'}`);
+      Alert.alert(
+        '⚠️ Arduino Connection Failed',
+        `Could not reach Arduino at ${cleaned}.\n\nReason: ${result.error || 'Network error'}\n\nMake sure your phone is connected to the 'Hi' Wi-Fi (not cellular data).`
+      );
+    }
+  };
+
+  const handleTestEsp32Connection = async () => {
+    const cleaned = sanitizeIP(esp32Ip, DEFAULT_ESP32_IP);
+    setEsp32Ip(cleaned);
+    setPingingEsp32(true);
+    setEsp32Status(`Testing http://${cleaned}/ping ...`);
+    const result = await pingESP32(cleaned);
+    setPingingEsp32(false);
+    if (result.ok) {
+      setEsp32Status(`✅ Connected to http://${cleaned}`);
+      Alert.alert('✅ ESP32-Mini Connected', `Successfully connected to ESP32-Mini at ${cleaned}`);
+    } else {
+      setEsp32Status(`❌ Failed: ${result.error || 'Network error'}`);
+      Alert.alert(
+        '⚠️ ESP32-Mini Connection Failed',
+        `Could not reach ESP32-Mini at ${cleaned}.\n\nReason: ${result.error || 'Network error'}\n\nMake sure your phone is connected to the 'Hi' Wi-Fi (not cellular data).`
+      );
+    }
+  };
+
+  const handleTestBuzzer = async () => {
+    const cleaned = sanitizeIP(arduinoIp, DEFAULT_ARDUINO_IP);
+    setArduinoIp(cleaned);
+    setBuzzing(true);
+    const success = await triggerBuzzerRelayTest();
+    setBuzzing(false);
     if (success) {
-      Alert.alert('✅ Wi-Fi Connection Success', `Successfully connected to ESP32 / Arduino at ${arduinoIp}`);
+      Alert.alert('🔔 Buzzer Relay Active', `Arduino at ${cleaned} is now sounding the buzzer for 5 seconds!`);
     } else {
       Alert.alert(
-        '⚠️ Wi-Fi Connection Failed',
-        `Could not reach hardware at ${arduinoIp}.\n\nEnsure:\n1. Device and phone are on the same Wi-Fi.\n2. IP address is correct.`
+        '⚠️ Wi-Fi Buzzer Test Failed',
+        `Could not reach Arduino at ${cleaned}.\n\nEnsure:\n1. Arduino and phone are on the same Wi-Fi.\n2. IP address (${cleaned}) is correct.`
       );
     }
   };
 
   const handleTestVibrate = async () => {
+    const cleaned = sanitizeIP(esp32Ip, DEFAULT_ESP32_IP);
+    setEsp32Ip(cleaned);
     setVibrating(true);
     const success = await triggerVibrateESP32(2500, 3);
     setVibrating(false);
     if (success) {
-      Alert.alert('📳 Vibration Signal Sent', `ESP32 at ${arduinoIp} should now be vibrating!`);
+      Alert.alert('📳 Vibration Signal Sent', `ESP32 at ${cleaned} should now be vibrating!`);
     } else {
       Alert.alert(
         '⚠️ Could Not Trigger Vibration',
-        `Could not send vibration command to ${arduinoIp}.\nMake sure the ESP32 is powered on and connected to the same Wi-Fi.`
+        `Could not send vibration command to ${cleaned}.\nMake sure the ESP32 is powered on and connected to the same Wi-Fi.`
       );
     }
   };
@@ -147,16 +213,16 @@ export default function SettingsScreen() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Arduino Hardware (Wi-Fi)</Text>
+          <Text style={styles.sectionTitle}>Arduino Controller (Wi-Fi)</Text>
 
           <View style={styles.ipCard}>
             <View style={styles.settingLeft}>
               <View style={styles.iconBox}>
-                <Ionicons name="wifi-outline" size={20} color="#4CAF50" />
+                <Ionicons name="hardware-chip-outline" size={20} color="#4CAF50" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.settingLabel}>Arduino IP Address</Text>
-                <Text style={styles.settingDesc}>Shown on 16x2 LCD screen at startup</Text>
+                <Text style={styles.settingDesc}>Controls Buzzer Relay (Pin 7), Solenoid Lock, & 16x2 LCD</Text>
               </View>
             </View>
 
@@ -165,13 +231,14 @@ export default function SettingsScreen() {
                 style={styles.ipInput}
                 value={arduinoIp}
                 onChangeText={setArduinoIp}
-                placeholder="192.168.1.23"
-                keyboardType="numeric"
+                placeholder="10.146.105.91"
+                keyboardType="url"
                 autoCapitalize="none"
+                autoCorrect={false}
               />
               <TouchableOpacity
                 style={styles.saveIpBtn}
-                onPress={handleSaveIp}
+                onPress={handleSaveArduinoIp}
               >
                 <Text style={styles.saveIpText}>Save</Text>
               </TouchableOpacity>
@@ -179,33 +246,99 @@ export default function SettingsScreen() {
 
             <TouchableOpacity
               style={styles.testBtn}
-              onPress={handleTestConnection}
-              disabled={pinging}
+              onPress={handleTestArduinoConnection}
+              disabled={pingingArduino}
             >
               <Ionicons
-                name={pinging ? 'refresh-circle' : 'pulse-outline'}
+                name={pingingArduino ? 'refresh-circle' : 'pulse-outline'}
                 size={18}
                 color="#1B5E20"
                 style={{ marginRight: 6 }}
               />
               <Text style={styles.testBtnText}>
-                {pinging ? 'Testing Connection...' : 'Test Wi-Fi Connection'}
+                {pingingArduino ? 'Testing Arduino...' : 'Test Arduino Connection'}
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.testBtn, { backgroundColor: '#FFF3E0', borderColor: '#FFE0B2', marginTop: 8 }]}
+              style={[styles.testBtn, { backgroundColor: '#EDE7F6', borderColor: '#D1C4E9', marginTop: 8 }]}
+              onPress={handleTestBuzzer}
+              disabled={buzzing}
+            >
+              <Ionicons
+                name="notifications-outline"
+                size={18}
+                color="#6A1B9A"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.testBtnText, { color: '#6A1B9A' }]}>
+                {buzzing ? 'Sounding Buzzer (5s)...' : '🔔 Test Arduino Buzzer Relay (5s)'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>ESP32-Mini Controller (Wi-Fi)</Text>
+
+          <View style={styles.ipCard}>
+            <View style={styles.settingLeft}>
+              <View style={[styles.iconBox, { backgroundColor: '#FFF3E0' }]}>
+                <Ionicons name="wifi-outline" size={20} color="#E65100" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingLabel}>ESP32-Mini IP Address</Text>
+                <Text style={styles.settingDesc}>Direct Wi-Fi connection. Controls Vibration Motor (GPIO 4)</Text>
+              </View>
+            </View>
+
+            <View style={styles.ipInputRow}>
+              <TextInput
+                style={styles.ipInput}
+                value={esp32Ip}
+                onChangeText={setEsp32Ip}
+                placeholder="192.168.1.13"
+                keyboardType="url"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TouchableOpacity
+                style={[styles.saveIpBtn, { backgroundColor: '#E65100' }]}
+                onPress={handleSaveEsp32Ip}
+              >
+                <Text style={styles.saveIpText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.testBtn, { backgroundColor: '#FFF3E0', borderColor: '#FFE0B2' }]}
+              onPress={handleTestEsp32Connection}
+              disabled={pingingEsp32}
+            >
+              <Ionicons
+                name={pingingEsp32 ? 'refresh-circle' : 'pulse-outline'}
+                size={18}
+                color="#E65100"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.testBtnText, { color: '#E65100' }]}>
+                {pingingEsp32 ? 'Testing ESP32...' : 'Test ESP32-Mini Connection'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.testBtn, { backgroundColor: '#FFF8E1', borderColor: '#FFE082', marginTop: 8 }]}
               onPress={handleTestVibrate}
               disabled={vibrating}
             >
               <Ionicons
                 name="phone-portrait-outline"
                 size={18}
-                color="#E65100"
+                color="#F57F17"
                 style={{ marginRight: 6 }}
               />
-              <Text style={[styles.testBtnText, { color: '#E65100' }]}>
-                {vibrating ? 'Sending Vibration...' : '📳 Test ESP32 Vibration Motor'}
+              <Text style={[styles.testBtnText, { color: '#F57F17' }]}>
+                {vibrating ? 'Vibrating...' : '📳 Test ESP32 Vibration Motor'}
               </Text>
             </TouchableOpacity>
           </View>

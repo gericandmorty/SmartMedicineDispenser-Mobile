@@ -18,6 +18,7 @@ import {
 import {
   syncScheduleToESP32,
   deleteScheduleFromESP32,
+  triggerHardwareAlert,
 } from '../services/hardware';
 
 function sortReminders(data: Reminder[]): Reminder[] {
@@ -82,6 +83,38 @@ export function useReminders() {
       flushSyncQueue().catch(() => {});
     });
   }, [refresh, flushSyncQueue]);
+
+  // Live watchdog: when scheduled time arrives on phone, trigger hardware buzzer over Wi-Fi
+  useEffect(() => {
+    if (reminders.length === 0) return;
+
+    const alertedSet = new Set<string>();
+
+    const interval = setInterval(() => {
+      const now = new Date();
+      const curHour = now.getHours();
+      const curMin = now.getMinutes();
+
+      for (const r of reminders) {
+        let rHour = r.hour;
+        if (r.amPm === 'AM' && r.hour === 12) rHour = 0;
+        else if (r.amPm === 'PM' && r.hour !== 12) rHour = r.hour + 12;
+
+        if (rHour === curHour && r.minute === curMin) {
+          const key = `${r.id}-${now.toDateString()}-${curHour}:${curMin}`;
+          if (!alertedSet.has(key)) {
+            alertedSet.add(key);
+            const comp = r.compartment || 'Drawer 1 (A1)';
+            const drawer = comp.includes('Drawer 2') ? 2 : 1;
+            console.log(`[Watchdog] ⏰ Scheduled time hit for ${comp}! Triggering hardware buzzer...`);
+            triggerHardwareAlert(comp, drawer).catch(() => {});
+          }
+        }
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [reminders]);
 
   const add = useCallback(async (reminder: Reminder): Promise<Reminder[]> => {
     const notificationId = await scheduleReminderNotification(reminder);

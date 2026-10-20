@@ -12,6 +12,7 @@
     },
     "android": {
       "package": "com.medicinereminder.app",
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#4CAF50",
         "foregroundImage": "./assets/images/android-icon-foreground.png"
