@@ -1,13 +1,14 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Reminder } from '../types/reminder';
+import { Reminder, ColumnStockStatus } from '../types/reminder';
 
 import { triggerHardwareDispense } from '../services/hardware';
 
 interface Props {
   reminder: Reminder;
   onDelete: (id: string) => void;
+  stockStatus?: ColumnStockStatus;
 }
 
 function formatTime(r: Reminder): string {
@@ -32,7 +33,7 @@ function formatDateLabel(dateStr?: string): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export default function ReminderCard({ reminder, onDelete }: Props) {
+export default function ReminderCard({ reminder, onDelete, stockStatus }: Props) {
   return (
     <View style={styles.card}>
       <View style={styles.iconWrap}>
@@ -56,6 +57,52 @@ export default function ReminderCard({ reminder, onDelete }: Props) {
           ) : (
             <Text style={styles.recurrence}>Every day</Text>
           )}
+
+          {stockStatus ? (
+            <View
+              style={[
+                styles.stockTag,
+                stockStatus.isOutOfStock
+                  ? styles.stockTagEmpty
+                  : stockStatus.isLowStock
+                  ? styles.stockTagLow
+                  : styles.stockTagOk,
+              ]}
+            >
+              <Ionicons
+                name={
+                  stockStatus.isOutOfStock
+                    ? 'alert-circle'
+                    : stockStatus.isLowStock
+                    ? 'warning-outline'
+                    : 'medkit-outline'
+                }
+                size={11}
+                color={
+                  stockStatus.isOutOfStock
+                    ? '#D32F2F'
+                    : stockStatus.isLowStock
+                    ? '#E65100'
+                    : '#1B5E20'
+                }
+                style={{ marginRight: 3 }}
+              />
+              <Text
+                style={[
+                  styles.stockTagText,
+                  stockStatus.isOutOfStock
+                    ? styles.stockTextEmpty
+                    : stockStatus.isLowStock
+                    ? styles.stockTextLow
+                    : styles.stockTextOk,
+                ]}
+              >
+                {stockStatus.isOutOfStock
+                  ? `Col ${stockStatus.column}: 0 left`
+                  : `Col ${stockStatus.column}: ${stockStatus.remainingDoses}/${stockStatus.cycleDays} left`}
+              </Text>
+            </View>
+          ) : null}
         </View>
       </View>
 
@@ -181,5 +228,38 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFEBEE',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  stockTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 0.5,
+  },
+  stockTagOk: {
+    backgroundColor: '#E8F5E9',
+    borderColor: '#A5D6A7',
+  },
+  stockTagLow: {
+    backgroundColor: '#FFF3E0',
+    borderColor: '#FFCC80',
+  },
+  stockTagEmpty: {
+    backgroundColor: '#FFEBEE',
+    borderColor: '#EF9A9A',
+  },
+  stockTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  stockTextOk: {
+    color: '#2E7D32',
+  },
+  stockTextLow: {
+    color: '#E65100',
+  },
+  stockTextEmpty: {
+    color: '#C62828',
   },
 });

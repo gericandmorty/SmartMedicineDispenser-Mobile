@@ -68,11 +68,7 @@ export default function ConfirmationScreen() {
   const formattedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${amPm}`;
   const hasDate = params.date && params.date.trim() !== '';
 
-  const handleDone = useCallback(async () => {
-    if (savedRef.current || saving) return;
-    savedRef.current = true;
-    setSaving(true);
-
+  const saveReminderToStorage = useCallback(async () => {
     const reminder: Reminder = {
       id: params.reminderId && params.reminderId.trim() !== ''
         ? params.reminderId
@@ -88,10 +84,24 @@ export default function ConfirmationScreen() {
         ? parseInt(params.slotIndex, 10)
         : undefined,
     };
-
     await add(reminder);
-    router.replace('/(tabs)/schedule');
-  }, [saving, hour, minute, amPm, hasDate, params.date, params.reminderId, params.compartment, params.slotIndex, add]);
+  }, [hour, minute, amPm, hasDate, params.date, params.reminderId, params.compartment, params.slotIndex, add]);
+
+  const handleDone = useCallback(async () => {
+    if (savedRef.current || saving) return;
+    savedRef.current = true;
+    setSaving(true);
+    await saveReminderToStorage();
+    router.replace('/(tabs)');
+  }, [saving, saveReminderToStorage]);
+
+  const handleAddAnother = useCallback(async () => {
+    if (savedRef.current || saving) return;
+    savedRef.current = true;
+    setSaving(true);
+    await saveReminderToStorage();
+    router.replace('/set-time');
+  }, [saving, saveReminderToStorage]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -128,6 +138,15 @@ export default function ConfirmationScreen() {
       </Animated.View>
 
       <View style={styles.footer}>
+        <PrimaryButton
+          label="+ ADD ANOTHER MEDICINE"
+          onPress={handleAddAnother}
+          color="#4CAF50"
+          icon="add-circle-outline"
+          loading={saving}
+          style={styles.addAnotherBtn}
+        />
+        <View style={{ height: 10 }} />
         <PrimaryButton
           label="DONE"
           onPress={handleDone}
@@ -210,6 +229,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingBottom: 32,
     paddingTop: 12,
+  },
+  addAnotherBtn: {
+    width: '100%',
+    borderRadius: 16,
   },
   doneBtn: {
     width: '100%',

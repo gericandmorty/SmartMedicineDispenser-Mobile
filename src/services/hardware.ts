@@ -1,6 +1,6 @@
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Reminder } from '../types/reminder';
+import { Reminder, HardwareStatus, DoseEvent } from '../types/reminder';
 
 const ARDUINO_IP_KEY = '@arduino_wifi_ip';
 export const DEFAULT_ARDUINO_IP = '192.168.1.23';
@@ -78,6 +78,54 @@ export async function pingArduino(targetIP?: string): Promise<boolean> {
 }
 
 /**
+ * Fetch detailed hardware status (active alerts, time, vibration state)
+ */
+export async function fetchHardwareStatus(targetIP?: string): Promise<HardwareStatus | null> {
+  const ip = targetIP || (await getArduinoIP());
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+  try {
+    const res = await fetch(`http://${ip}/status`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (res.ok) {
+      const data = await res.json();
+      return data as HardwareStatus;
+    }
+    return null;
+  } catch {
+    clearTimeout(timeoutId);
+    return null;
+  }
+}
+
+/**
+ * Fetch hardware event history buffer over Wi-Fi (for offline recovery)
+ */
+export async function fetchHardwareEvents(targetIP?: string, limit: number = 10): Promise<DoseEvent[]> {
+  const ip = targetIP || (await getArduinoIP());
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+  try {
+    const res = await fetch(`http://${ip}/events?limit=${limit}`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (res.ok) {
+      const data = await res.json();
+      return (data.events || []) as DoseEvent[];
+    }
+    return [];
+  } catch {
+    clearTimeout(timeoutId);
+    return [];
+  }
+}
+
+/**
  * Send custom LCD message to Arduino over Wi-Fi
  */
 export async function sendWiFiMessage(line1: string, line2: string): Promise<boolean> {
@@ -138,7 +186,7 @@ export async function triggerHardwareDispense(reminder: Reminder): Promise<void>
 }
 
 /**
- * Sync schedule to ESP32 Mini over Wi-Fi
+ * Sync schedule to ESP32 Mini over Wi-Fi with client epoch calibration
  */
 export async function syncScheduleToESP32(reminder: Reminder): Promise<boolean> {
   const ip = await getArduinoIP();
@@ -146,14 +194,17 @@ export async function syncScheduleToESP32(reminder: Reminder): Promise<boolean> 
   const timeoutId = setTimeout(() => controller.abort(), 3500);
 
   try {
+    const clientEpoch = Math.floor(Date.now() / 1000);
     const params = new URLSearchParams({
       id: reminder.id,
       hour: String(reminder.hour),
       minute: String(reminder.minute),
       amPm: reminder.amPm,
+      recurrence: reminder.recurrence,
       date: reminder.date || '',
       compartment: reminder.compartment || '',
       slotIndex: String(reminder.slotIndex ?? 0),
+      client_epoch: String(clientEpoch),
     });
 
     const res = await fetch(`http://${ip}/set-schedule?${params.toString()}`, {
@@ -199,6 +250,28 @@ export async function triggerVibrateESP32(durationMs: number = 2500, pulses: num
 
   try {
     const res = await fetch(`http://${ip}/vibrate?duration=${durationMs}&pulses=${pulses}`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return res.ok;
+  } catch {
+    clearTimeout(timeoutId);
+    return false;
+  }
+}
+
+/**
+ * Silence vibration / manual dose confirmation over Wi-Fi
+ */
+export async function silenceAlertOrConfirm(scheduleId?: string): Promise<boolean> {
+  const ip = await getArduinoIP();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+  try {
+    const query = scheduleId ? `?schedule_id=${encodeURIComponent(scheduleId)}` : '';
+    const res = await fetch(`http://${ip}/stop-vibrate${query}`, {
       method: 'GET',
       signal: controller.signal,
     });

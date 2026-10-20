@@ -1,6 +1,14 @@
 import { useState, useEffect, useCallback, startTransition } from 'react';
-import { Reminder } from '../types/reminder';
-import { loadReminders, addReminder, deleteReminder } from '../services/storage';
+import { Reminder, DoseEvent, DoseResolution } from '../types/reminder';
+import {
+  loadReminders,
+  addReminder,
+  deleteReminder,
+  markReminderSyncStatus,
+  getPendingSyncReminders,
+  loadDoseHistory,
+  recordDoseResolution,
+} from '../services/storage';
 import {
   scheduleReminderNotification,
   cancelReminderNotification,
@@ -16,8 +24,6 @@ function sortReminders(data: Reminder[]): Reminder[] {
     if (a.date && b.date && a.date !== b.date) {
       return a.date.localeCompare(b.date);
     }
-    // Specific dates before daily recurrence or vice versa?
-    // Keep recurring and specific organized, then sort by time:
     const toMins = (r: Reminder) => {
       let h = r.hour;
       if (r.amPm === 'AM' && r.hour === 12) h = 0;
@@ -30,42 +36,75 @@ function sortReminders(data: Reminder[]): Reminder[] {
 
 export function useReminders() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [doseHistory, setDoseHistory] = useState<DoseEvent[]>([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const data = await loadReminders();
-    const sorted = sortReminders(data);
+    const [remData, histData] = await Promise.all([
+      loadReminders(),
+      loadDoseHistory(),
+    ]);
+    const sorted = sortReminders(remData);
     startTransition(() => {
       setReminders(sorted);
+      setDoseHistory(histData);
       setLoading(false);
     });
   }, []);
 
+  // Flush any pending sync queue when Wi-Fi reconnects or on refresh
+  const flushSyncQueue = useCallback(async () => {
+    const pending = await getPendingSyncReminders();
+    if (pending.length === 0) return;
+
+    for (const item of pending) {
+      const ok = await syncScheduleToESP32(item);
+      if (ok) {
+        await markReminderSyncStatus(item.id, 'ACTIVE');
+      }
+    }
+    const latest = await loadReminders();
+    startTransition(() => {
+      setReminders(sortReminders(latest));
+    });
+  }, []);
+
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    refresh().then(() => {
+      flushSyncQueue().catch(() => {});
+    });
+  }, [refresh, flushSyncQueue]);
 
   const add = useCallback(async (reminder: Reminder): Promise<Reminder[]> => {
     const notificationId = await scheduleReminderNotification(reminder);
     const withNotif: Reminder = notificationId
-      ? { ...reminder, notificationId }
-      : reminder;
+      ? { ...reminder, notificationId, syncStatus: 'SYNC_PENDING' }
+      : { ...reminder, syncStatus: 'SYNC_PENDING' };
+
     const updated = await addReminder(withNotif);
     const sorted = sortReminders(updated);
     startTransition(() => {
       setReminders(sorted);
     });
 
-    // Sync schedule to ESP32 Mini over Wi-Fi asynchronously
-    syncScheduleToESP32(withNotif).catch((e) => {
-      console.log('[useReminders] ESP32 Wi-Fi sync error:', e);
-    });
+    // Attempt immediate Wi-Fi sync to ESP32 Mini
+    syncScheduleToESP32(withNotif)
+      .then(async (success) => {
+        if (success) {
+          const synced = await markReminderSyncStatus(withNotif.id, 'ACTIVE');
+          startTransition(() => {
+            setReminders(sortReminders(synced));
+          });
+        }
+      })
+      .catch((e) => {
+        console.log('[useReminders] ESP32 Wi-Fi sync offline, queued:', e);
+      });
 
     return updated;
   }, []);
 
   const remove = useCallback(async (id: string): Promise<void> => {
-    // Read from storage directly to avoid stale closure
     const current = await loadReminders();
     const target = current.find((r) => r.id === id);
     if (target?.notificationId) {
@@ -83,5 +122,26 @@ export function useReminders() {
     });
   }, []);
 
-  return { reminders, loading, refresh, add, remove };
+  const resolveDose = useCallback(
+    async (reminder: Reminder, resolution: DoseResolution): Promise<DoseEvent> => {
+      const event = await recordDoseResolution(reminder, resolution);
+      const updatedHistory = await loadDoseHistory();
+      startTransition(() => {
+        setDoseHistory(updatedHistory);
+      });
+      return event;
+    },
+    []
+  );
+
+  return {
+    reminders,
+    doseHistory,
+    loading,
+    refresh,
+    flushSyncQueue,
+    add,
+    remove,
+    resolveDose,
+  };
 }
