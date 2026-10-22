@@ -22,6 +22,7 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
         id TEXT PRIMARY KEY NOT NULL,
         hour INTEGER NOT NULL,
         minute INTEGER NOT NULL,
+        second INTEGER,
         amPm TEXT NOT NULL,
         recurrence TEXT,
         date TEXT,
@@ -49,6 +50,13 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
         refillDate TEXT NOT NULL
       );
     `);
+
+    try {
+      await db.execAsync(`ALTER TABLE reminders ADD COLUMN second INTEGER;`);
+    } catch {
+      // Column already exists
+    }
+
     dbInstance = db;
     return db;
   })();
@@ -66,6 +74,7 @@ export async function sqliteLoadReminders(): Promise<Reminder[]> {
     id: r.id,
     hour: r.hour,
     minute: r.minute,
+    second: r.second !== null && r.second !== undefined ? Number(r.second) : undefined,
     amPm: r.amPm,
     recurrence: r.recurrence || undefined,
     date: r.date || undefined,
@@ -82,12 +91,13 @@ export async function sqliteLoadReminders(): Promise<Reminder[]> {
 export async function sqliteSaveReminder(reminder: Reminder): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    `INSERT OR REPLACE INTO reminders (id, hour, minute, amPm, recurrence, date, compartment, slotIndex, syncStatus, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO reminders (id, hour, minute, second, amPm, recurrence, date, compartment, slotIndex, syncStatus, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       reminder.id,
       reminder.hour,
       reminder.minute,
+      reminder.second !== undefined ? reminder.second : null,
       reminder.amPm,
       reminder.recurrence || null,
       reminder.date || null,

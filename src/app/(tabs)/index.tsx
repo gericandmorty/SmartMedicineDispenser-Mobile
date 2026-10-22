@@ -4,11 +4,11 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  SafeAreaView,
   Alert,
   TouchableOpacity,
   Animated,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useReminders } from '../../hooks/useReminders';
@@ -91,7 +91,9 @@ export default function HomeScreen() {
 
   const handleSaveSchedule = async (reminder: Reminder) => {
     await add(reminder);
-    const timeFormatted = `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')} ${reminder.amPm}`;
+    const timeFormatted = reminder.second !== undefined
+      ? `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')}:${String(reminder.second).padStart(2, '0')} ${reminder.amPm}`
+      : `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')} ${reminder.amPm}`;
     showToast(`Schedule set for ${timeFormatted}`);
   };
 

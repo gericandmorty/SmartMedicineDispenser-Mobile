@@ -227,7 +227,7 @@ export async function recordDoseResolution(
     compartment: reminder.compartment,
     slotIndex: reminder.slotIndex,
     triggerDate,
-    scheduledTimeFormatted: formatTime12(reminder.hour, reminder.minute, reminder.amPm),
+    scheduledTimeFormatted: formatTime12(reminder.hour, reminder.minute, reminder.amPm, reminder.second),
     targetTriggerEpoch: targetTriggerEpochSec,
     resolvedAtEpoch: resolvedAtEpochSec,
     resolution,

@@ -3,9 +3,9 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   Animated,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import PrimaryButton from '../components/PrimaryButton';
@@ -32,6 +32,7 @@ export default function ConfirmationScreen() {
   const params = useLocalSearchParams<{
     hour: string;
     minute: string;
+    second?: string;
     amPm: string;
     date?: string;
     compartment?: string;
@@ -40,6 +41,7 @@ export default function ConfirmationScreen() {
   }>();
   const hour = parseInt(params.hour ?? '8', 10);
   const minute = parseInt(params.minute ?? '0', 10);
+  const second = params.second && params.second.trim() !== '' ? parseInt(params.second, 10) : undefined;
   const amPm = (params.amPm ?? 'AM') as AmPm;
 
   const { add } = useReminders();
@@ -65,7 +67,9 @@ export default function ConfirmationScreen() {
     ]).start();
   }, []);
 
-  const formattedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${amPm}`;
+  const formattedTime = second !== undefined
+    ? `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')} ${amPm}`
+    : `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${amPm}`;
   const hasDate = params.date && params.date.trim() !== '';
 
   const saveReminderToStorage = useCallback(async () => {
@@ -75,6 +79,7 @@ export default function ConfirmationScreen() {
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       hour,
       minute,
+      second,
       amPm,
       recurrence: hasDate ? 'once' : 'every-day',
       date: hasDate ? params.date : undefined,
@@ -85,7 +90,7 @@ export default function ConfirmationScreen() {
         : undefined,
     };
     await add(reminder);
-  }, [hour, minute, amPm, hasDate, params.date, params.reminderId, params.compartment, params.slotIndex, add]);
+  }, [hour, minute, second, amPm, hasDate, params.date, params.reminderId, params.compartment, params.slotIndex, add]);
 
   const handleDone = useCallback(async () => {
     if (savedRef.current || saving) return;
