@@ -3,9 +3,9 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   Animated,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import PrimaryButton from '../components/PrimaryButton';
@@ -32,6 +32,7 @@ export default function ConfirmationScreen() {
   const params = useLocalSearchParams<{
     hour: string;
     minute: string;
+    second?: string;
     amPm: string;
     date?: string;
     compartment?: string;
@@ -40,6 +41,7 @@ export default function ConfirmationScreen() {
   }>();
   const hour = parseInt(params.hour ?? '8', 10);
   const minute = parseInt(params.minute ?? '0', 10);
+  const second = params.second && params.second.trim() !== '' ? parseInt(params.second, 10) : undefined;
   const amPm = (params.amPm ?? 'AM') as AmPm;
 
   const { add } = useReminders();
@@ -65,20 +67,19 @@ export default function ConfirmationScreen() {
     ]).start();
   }, []);
 
-  const formattedTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${amPm}`;
+  const formattedTime = second !== undefined
+    ? `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')} ${amPm}`
+    : `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${amPm}`;
   const hasDate = params.date && params.date.trim() !== '';
 
-  const handleDone = useCallback(async () => {
-    if (savedRef.current || saving) return;
-    savedRef.current = true;
-    setSaving(true);
-
+  const saveReminderToStorage = useCallback(async () => {
     const reminder: Reminder = {
       id: params.reminderId && params.reminderId.trim() !== ''
         ? params.reminderId
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       hour,
       minute,
+      second,
       amPm,
       recurrence: hasDate ? 'once' : 'every-day',
       date: hasDate ? params.date : undefined,
@@ -88,10 +89,24 @@ export default function ConfirmationScreen() {
         ? parseInt(params.slotIndex, 10)
         : undefined,
     };
-
     await add(reminder);
-    router.replace('/(tabs)/schedule');
-  }, [saving, hour, minute, amPm, hasDate, params.date, params.reminderId, params.compartment, params.slotIndex, add]);
+  }, [hour, minute, second, amPm, hasDate, params.date, params.reminderId, params.compartment, params.slotIndex, add]);
+
+  const handleDone = useCallback(async () => {
+    if (savedRef.current || saving) return;
+    savedRef.current = true;
+    setSaving(true);
+    await saveReminderToStorage();
+    router.replace('/(tabs)');
+  }, [saving, saveReminderToStorage]);
+
+  const handleAddAnother = useCallback(async () => {
+    if (savedRef.current || saving) return;
+    savedRef.current = true;
+    setSaving(true);
+    await saveReminderToStorage();
+    router.replace('/set-time');
+  }, [saving, saveReminderToStorage]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -128,6 +143,15 @@ export default function ConfirmationScreen() {
       </Animated.View>
 
       <View style={styles.footer}>
+        <PrimaryButton
+          label="+ ADD ANOTHER MEDICINE"
+          onPress={handleAddAnother}
+          color="#4CAF50"
+          icon="add-circle-outline"
+          loading={saving}
+          style={styles.addAnotherBtn}
+        />
+        <View style={{ height: 10 }} />
         <PrimaryButton
           label="DONE"
           onPress={handleDone}
@@ -210,6 +234,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingBottom: 32,
     paddingTop: 12,
+  },
+  addAnotherBtn: {
+    width: '100%',
+    borderRadius: 16,
   },
   doneBtn: {
     width: '100%',

@@ -43,19 +43,16 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
+          title: 'Schedule',
           tabBarIcon: ({ focused }) => (
-            <TabIcon name="home" focused={focused} label="Home" />
+            <TabIcon name="calendar" focused={focused} label="Schedule" />
           ),
         }}
       />
       <Tabs.Screen
         name="schedule"
         options={{
-          title: 'Schedule',
-          tabBarIcon: ({ focused }) => (
-            <TabIcon name="calendar" focused={focused} label="Schedule" />
-          ),
+          href: null,
         }}
       />
       <Tabs.Screen
