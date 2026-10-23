@@ -94,14 +94,18 @@ export function useReminders() {
       const now = new Date();
       const curHour = now.getHours();
       const curMin = now.getMinutes();
+      const curSec = now.getSeconds();
 
       for (const r of reminders) {
         let rHour = r.hour;
         if (r.amPm === 'AM' && r.hour === 12) rHour = 0;
         else if (r.amPm === 'PM' && r.hour !== 12) rHour = r.hour + 12;
 
-        if (rHour === curHour && r.minute === curMin) {
-          const key = `${r.id}-${now.toDateString()}-${curHour}:${curMin}`;
+        const targetSec = r.second ?? 0;
+        const secMatch = r.second === undefined || Math.abs(curSec - targetSec) <= 1;
+
+        if (rHour === curHour && r.minute === curMin && secMatch) {
+          const key = `${r.id}-${now.toDateString()}-${curHour}:${curMin}:${targetSec}`;
           if (!alertedSet.has(key)) {
             alertedSet.add(key);
             const comp = r.compartment || 'Drawer 1 (A1)';
@@ -111,7 +115,7 @@ export function useReminders() {
           }
         }
       }
-    }, 2000);
+    }, 1000);
 
     return () => clearInterval(interval);
   }, [reminders]);

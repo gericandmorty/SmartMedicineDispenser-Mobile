@@ -14,6 +14,10 @@ interface Props {
 function formatTime(r: Reminder): string {
   const h = String(r.hour).padStart(2, '0');
   const m = String(r.minute).padStart(2, '0');
+  if (r.second !== undefined) {
+    const s = String(r.second).padStart(2, '0');
+    return `${h}:${m}:${s} ${r.amPm}`;
+  }
   return `${h}:${m} ${r.amPm}`;
 }
 

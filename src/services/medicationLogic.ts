@@ -22,10 +22,29 @@ export function to24Hour(hour12: number, amPm: AmPm): number {
 }
 
 /**
- * Formats hour, minute, amPm to a standard string e.g. "11:00 AM"
+ * Returns 12-hour hour (1-12), minute (0-59), second (0-59), and amPm ('AM' | 'PM') for a given Date (defaults to now).
  */
-export function formatTime12(hour: number, minute: number, amPm: AmPm): string {
+export function getCurrentTime12(d: Date = new Date()): { hour: number; minute: number; second: number; amPm: AmPm } {
+  const rawHours = d.getHours();
+  const minute = d.getMinutes();
+  const second = d.getSeconds();
+  const amPm: AmPm = rawHours >= 12 ? 'PM' : 'AM';
+  let hour = rawHours % 12;
+  if (hour === 0) {
+    hour = 12;
+  }
+  return { hour, minute, second, amPm };
+}
+
+/**
+ * Formats hour, minute, amPm, and optional second to a standard string e.g. "11:00 AM" or "11:00:30 AM"
+ */
+export function formatTime12(hour: number, minute: number, amPm: AmPm, second?: number): string {
   const padMin = String(minute).padStart(2, '0');
+  if (second !== undefined) {
+    const padSec = String(second).padStart(2, '0');
+    return `${hour}:${padMin}:${padSec} ${amPm}`;
+  }
   return `${hour}:${padMin} ${amPm}`;
 }
 
@@ -44,10 +63,11 @@ export function formatDateLocal(d: Date): string {
  */
 export function computeTargetTriggerEpoch(reminder: Reminder, referenceDate: Date = new Date()): number {
   const h24 = to24Hour(reminder.hour, reminder.amPm);
+  const sec = reminder.second ?? 0;
 
   if (reminder.date) {
     const [y, m, d] = reminder.date.split('-').map(Number);
-    const target = new Date(y, m - 1, d, h24, reminder.minute, 0, 0);
+    const target = new Date(y, m - 1, d, h24, reminder.minute, sec, 0);
     return target.getTime();
   }
 
@@ -58,7 +78,7 @@ export function computeTargetTriggerEpoch(reminder: Reminder, referenceDate: Dat
     referenceDate.getDate(),
     h24,
     reminder.minute,
-    0,
+    sec,
     0
   );
   return target.getTime();

@@ -319,6 +319,7 @@ export async function syncScheduleToESP32(reminder: Reminder): Promise<boolean> 
     id: reminder.id,
     hour: String(reminder.hour),
     minute: String(reminder.minute),
+    second: String(reminder.second ?? 0),
     amPm: reminder.amPm,
     recurrence: reminder.recurrence,
     date: reminder.date || '',

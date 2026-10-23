@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -7,7 +7,6 @@ import {
   Modal,
   Pressable,
   Animated,
-  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Reminder, ColumnStockStatus } from '../types/reminder';
@@ -39,9 +38,9 @@ export default function CompartmentDetailModal({
   onDelete,
   onRefill,
 }: Props) {
-  const animFade = useRef(new Animated.Value(0)).current;
-  const animScale = useRef(new Animated.Value(0.92)).current;
-  const animTranslateY = useRef(new Animated.Value(20)).current;
+  const [animFade] = useState(() => new Animated.Value(0));
+  const [animScale] = useState(() => new Animated.Value(0.92));
+  const [animTranslateY] = useState(() => new Animated.Value(20));
 
   useEffect(() => {
     if (visible) {
@@ -73,7 +72,9 @@ export default function CompartmentDetailModal({
 
   if (!visible || !reminder) return null;
 
-  const timeFormatted = `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')} ${reminder.amPm}`;
+  const timeFormatted = reminder.second !== undefined
+    ? `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')}:${String(reminder.second).padStart(2, '0')} ${reminder.amPm}`
+    : `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')} ${reminder.amPm}`;
   const isDaily = !reminder.date || reminder.recurrence === 'every-day';
   const recurrenceText = isDaily ? 'Every day' : `One-time on ${reminder.date}`;
 

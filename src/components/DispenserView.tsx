@@ -5,10 +5,9 @@ import {
   TouchableOpacity,
   Animated,
   StyleSheet,
-  Alert,
 } from 'react-native';
 import { router } from 'expo-router';
-import { Reminder, AmPm, DoseEvent, ColumnStockStatus } from '../types/reminder';
+import { Reminder, AmPm, DoseEvent } from '../types/reminder';
 import { triggerHardwareDispense } from '../services/hardware';
 import { calculateColumnStock } from '../services/medicationLogic';
 import { Ionicons } from '@expo/vector-icons';
@@ -154,6 +153,7 @@ export interface CompartmentScheduleParams {
   slotIndex: number;
   hour?: number;
   minute?: number;
+  second?: number;
   amPm?: AmPm;
   date?: string;
   reminderId?: string;
@@ -360,6 +360,7 @@ export default function DispenserView({
               slotIndex: rem.slotIndex ?? 0,
               hour: rem.hour,
               minute: rem.minute,
+              second: rem.second,
               amPm: rem.amPm,
               date: rem.date ?? '',
               reminderId: rem.id,

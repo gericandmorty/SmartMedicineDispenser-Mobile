@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AmPm, Reminder } from '../types/reminder';
+import { getCurrentTime12 } from '../services/medicationLogic';
 
 const ITEM_HEIGHT = 46;
 const VISIBLE_COUNT = 3;
@@ -22,6 +23,7 @@ const CENTER_OFFSET = ITEM_HEIGHT; // 46px
 
 const HOURS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const MINUTES = Array.from({ length: 60 }, (_, i) => i);
+const SECONDS = Array.from({ length: 60 }, (_, i) => i);
 const PERIODS: AmPm[] = ['AM', 'PM'];
 
 function toIsoString(d: Date): string {
@@ -48,34 +50,32 @@ function WheelColumn<T>({
 }: WheelColumnProps<T>) {
   const scrollRef = useRef<ScrollView>(null);
   const isInteracting = useRef(false);
+  const isMountedRef = useRef(false);
   const [visualIndex, setVisualIndex] = useState(selectedIndex);
 
-  const scrollToIndex = useCallback(
-    (idx: number, animated = true) => {
-      if (idx >= 0 && idx < items.length) {
-        scrollRef.current?.scrollTo({
-          y: idx * ITEM_HEIGHT,
-          animated,
-        });
-      }
-    },
-    [items.length]
-  );
-
+  // Initial scroll to selectedIndex on mount without animated jump
   useEffect(() => {
     const timer = setTimeout(() => {
-      scrollToIndex(selectedIndex, false);
+      scrollRef.current?.scrollTo({
+        y: selectedIndex * ITEM_HEIGHT,
+        animated: false,
+      });
       setVisualIndex(selectedIndex);
-    }, 40);
+      isMountedRef.current = true;
+    }, 50);
     return () => clearTimeout(timer);
-  }, [selectedIndex, scrollToIndex]);
+  }, []);
 
+  // Sync when selectedIndex changes externally while user is not dragging
   useEffect(() => {
-    if (!isInteracting.current) {
+    if (isMountedRef.current && !isInteracting.current && selectedIndex !== visualIndex) {
       setVisualIndex(selectedIndex);
-      scrollToIndex(selectedIndex, true);
+      scrollRef.current?.scrollTo({
+        y: selectedIndex * ITEM_HEIGHT,
+        animated: true,
+      });
     }
-  }, [selectedIndex, scrollToIndex]);
+  }, [selectedIndex]);
 
   const handleScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const y = e.nativeEvent.contentOffset.y;
@@ -86,7 +86,20 @@ function WheelColumn<T>({
     }
   };
 
-  const handleScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+  const handleScrollEndDrag = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const velocity = e.nativeEvent.velocity;
+    // If drag ended without momentum (slow drag release), commit selection now
+    if (!velocity || Math.abs(velocity.y || 0) < 0.1) {
+      const y = e.nativeEvent.contentOffset.y;
+      const idx = Math.round(y / ITEM_HEIGHT);
+      const clamped = Math.max(0, Math.min(items.length - 1, idx));
+      setVisualIndex(clamped);
+      onSelectIndex(clamped);
+      isInteracting.current = false;
+    }
+  };
+
+  const handleMomentumScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const y = e.nativeEvent.contentOffset.y;
     const idx = Math.round(y / ITEM_HEIGHT);
     const clamped = Math.max(0, Math.min(items.length - 1, idx));
@@ -110,8 +123,8 @@ function WheelColumn<T>({
         onScrollBeginDrag={() => {
           isInteracting.current = true;
         }}
-        onScrollEndDrag={handleScrollEnd}
-        onMomentumScrollEnd={handleScrollEnd}
+        onScrollEndDrag={handleScrollEndDrag}
+        onMomentumScrollEnd={handleMomentumScrollEnd}
       >
         {items.map((item, idx) => {
           const isSelected = idx === visualIndex;
@@ -120,8 +133,12 @@ function WheelColumn<T>({
               key={idx}
               style={[styles.itemRow, { width }]}
               onPress={() => {
-                scrollToIndex(idx, true);
+                isInteracting.current = false;
                 setVisualIndex(idx);
+                scrollRef.current?.scrollTo({
+                  y: idx * ITEM_HEIGHT,
+                  animated: true,
+                });
                 onSelectIndex(idx);
               }}
               activeOpacity={0.75}
@@ -146,6 +163,7 @@ function WheelColumn<T>({
 export interface SetScheduleParams {
   hour?: number;
   minute?: number;
+  second?: number;
   amPm?: AmPm;
   date?: string;
   compartment?: string;
@@ -190,9 +208,12 @@ function SetScheduleContent({
     return toIsoString(d);
   }, []);
 
-  const [hour, setHour] = useState<number>(initialParams?.hour ?? 8);
-  const [minute, setMinute] = useState<number>(initialParams?.minute ?? 0);
-  const [amPm, setAmPm] = useState<AmPm>(initialParams?.amPm ?? 'AM');
+  const defaultTime = useMemo(() => getCurrentTime12(), []);
+
+  const [hour, setHour] = useState<number>(() => initialParams?.hour ?? defaultTime.hour);
+  const [minute, setMinute] = useState<number>(() => initialParams?.minute ?? defaultTime.minute);
+  const [second, setSecond] = useState<number>(() => initialParams?.second ?? 0);
+  const [amPm, setAmPm] = useState<AmPm>(() => initialParams?.amPm ?? defaultTime.amPm);
   const [dateMode, setDateMode] = useState<'today' | 'tomorrow' | 'daily' | 'custom'>(() =>
     getInitialDateMode(initialParams?.date, todayStr, tomorrowStr)
   );
@@ -263,6 +284,7 @@ function SetScheduleContent({
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       hour,
       minute,
+      second,
       amPm,
       recurrence,
       date: finalDate,
@@ -280,6 +302,7 @@ function SetScheduleContent({
 
   const selectedHourIndex = Math.max(0, HOURS.indexOf(hour));
   const selectedMinuteIndex = Math.max(0, MINUTES.indexOf(minute));
+  const selectedSecondIndex = Math.max(0, SECONDS.indexOf(second));
   const selectedPeriodIndex = Math.max(0, PERIODS.indexOf(amPm));
 
   // Custom date display string
@@ -344,7 +367,7 @@ function SetScheduleContent({
                 selectedIndex={selectedHourIndex}
                 formatItem={(h) => String(h).padStart(2, '0')}
                 onSelectIndex={(idx) => setHour(HOURS[idx])}
-                width={64}
+                width={54}
               />
 
               {/* Colon */}
@@ -358,11 +381,25 @@ function SetScheduleContent({
                 selectedIndex={selectedMinuteIndex}
                 formatItem={(m) => String(m).padStart(2, '0')}
                 onSelectIndex={(idx) => setMinute(MINUTES[idx])}
-                width={64}
+                width={54}
+              />
+
+              {/* Colon */}
+              <View style={styles.colonWrap}>
+                <Text style={styles.colonText}>:</Text>
+              </View>
+
+              {/* Seconds */}
+              <WheelColumn<number>
+                items={SECONDS}
+                selectedIndex={selectedSecondIndex}
+                formatItem={(s) => String(s).padStart(2, '0')}
+                onSelectIndex={(idx) => setSecond(SECONDS[idx])}
+                width={54}
               />
 
               {/* Space */}
-              <View style={{ width: 10 }} />
+              <View style={{ width: 6 }} />
 
               {/* Period */}
               <WheelColumn<AmPm>
@@ -370,7 +407,7 @@ function SetScheduleContent({
                 selectedIndex={selectedPeriodIndex}
                 formatItem={(p) => p}
                 onSelectIndex={(idx) => setAmPm(PERIODS[idx])}
-                width={56}
+                width={52}
               />
             </View>
 
@@ -513,7 +550,7 @@ export default function SetScheduleBottomSheet({
       statusBarTranslucent
     >
       <SetScheduleContent
-        key={`${initialParams?.compartment || ''}-${initialParams?.reminderId || ''}-${initialParams?.hour || ''}-${initialParams?.minute || ''}`}
+        key={`${initialParams?.compartment || ''}-${initialParams?.reminderId || ''}`}
         initialParams={initialParams}
         onClose={onClose}
         onSave={onSave}
@@ -666,7 +703,7 @@ const styles = StyleSheet.create({
     height: WHEEL_HEIGHT,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 4,
+    paddingHorizontal: 2,
   },
   colonText: {
     fontSize: 26,

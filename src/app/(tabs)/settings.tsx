@@ -3,14 +3,13 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   Switch,
   ScrollView,
   TextInput,
   TouchableOpacity,
   Alert,
-  Linking,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import {
   getArduinoIP,
@@ -275,6 +274,12 @@ export default function SettingsScreen() {
                 {buzzing ? 'Sounding Buzzer (5s)...' : '🔔 Test Arduino Buzzer Relay (5s)'}
               </Text>
             </TouchableOpacity>
+
+            {arduinoStatus ? (
+              <Text style={{ fontSize: 12, color: '#2E7D32', marginTop: 8, fontWeight: '500' }}>
+                {arduinoStatus}
+              </Text>
+            ) : null}
           </View>
         </View>
 
@@ -341,6 +346,12 @@ export default function SettingsScreen() {
                 {vibrating ? 'Vibrating...' : '📳 Test ESP32 Vibration Motor'}
               </Text>
             </TouchableOpacity>
+
+            {esp32Status ? (
+              <Text style={{ fontSize: 12, color: '#E65100', marginTop: 8, fontWeight: '500' }}>
+                {esp32Status}
+              </Text>
+            ) : null}
           </View>
         </View>
 
@@ -350,7 +361,7 @@ export default function SettingsScreen() {
           <View style={styles.ipCard}>
             <Text style={styles.settingLabel}>Medicine Stock Simulation</Text>
             <Text style={styles.settingDesc}>
-              Insert mock history to test the 0/7 doses "Out of Stock" notification, red badges, and refilled flow directly in SQLite.
+              Insert mock history to test the 0/7 doses &quot;Out of Stock&quot; notification, red badges, and refilled flow directly in SQLite.
             </Text>
 
             <TouchableOpacity

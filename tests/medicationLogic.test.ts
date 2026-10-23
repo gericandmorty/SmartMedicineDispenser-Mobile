@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   to24Hour,
   formatTime12,
+  getCurrentTime12,
   computeTargetTriggerEpoch,
   calculateDoseOccurrence,
   validateScheduleConflict,
@@ -31,6 +32,29 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
       assert.strictEqual(formatTime12(11, 0, 'AM'), '11:00 AM');
       assert.strictEqual(formatTime12(8, 5, 'PM'), '8:05 PM');
       assert.strictEqual(formatTime12(12, 30, 'PM'), '12:30 PM');
+      assert.strictEqual(formatTime12(11, 0, 'AM', 45), '11:00:45 AM');
+    });
+
+    it('TC-1.5: extracts 12-hour hour, minute, second, and AM/PM accurately (getCurrentTime12)', () => {
+      // Midnight 00:00:00 -> 12:00:00 AM
+      const midnight = new Date(2026, 9, 21, 0, 0, 0);
+      assert.deepStrictEqual(getCurrentTime12(midnight), { hour: 12, minute: 0, second: 0, amPm: 'AM' });
+
+      // Morning 09:42:15 -> 9:42:15 AM
+      const morning = new Date(2026, 9, 21, 9, 42, 15);
+      assert.deepStrictEqual(getCurrentTime12(morning), { hour: 9, minute: 42, second: 15, amPm: 'AM' });
+
+      // Noon 12:00:30 -> 12:00:30 PM
+      const noon = new Date(2026, 9, 21, 12, 0, 30);
+      assert.deepStrictEqual(getCurrentTime12(noon), { hour: 12, minute: 0, second: 30, amPm: 'PM' });
+
+      // Afternoon 14:15:45 -> 2:15:45 PM
+      const afternoon = new Date(2026, 9, 21, 14, 15, 45);
+      assert.deepStrictEqual(getCurrentTime12(afternoon), { hour: 2, minute: 15, second: 45, amPm: 'PM' });
+
+      // Night 23:59:59 -> 11:59:59 PM
+      const night = new Date(2026, 9, 21, 23, 59, 59);
+      assert.deepStrictEqual(getCurrentTime12(night), { hour: 11, minute: 59, second: 59, amPm: 'PM' });
     });
 
     it('TC-1.3: computes target trigger epoch for daily recurring reminders', () => {
@@ -38,6 +62,7 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
         id: 'sch_1',
         hour: 11,
         minute: 0,
+        second: 30,
         amPm: 'AM',
         recurrence: 'every-day',
         createdAt: new Date().toISOString(),
@@ -45,7 +70,7 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
 
       const refDate = new Date(2026, 9, 20, 8, 0, 0); // Oct 20, 2026, 8:00 AM
       const triggerEpoch = computeTargetTriggerEpoch(reminder, refDate);
-      const expected = new Date(2026, 9, 20, 11, 0, 0).getTime();
+      const expected = new Date(2026, 9, 20, 11, 0, 30).getTime();
 
       assert.strictEqual(triggerEpoch, expected);
     });
@@ -55,6 +80,7 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
         id: 'sch_2',
         hour: 2,
         minute: 15,
+        second: 20,
         amPm: 'PM',
         recurrence: 'once',
         date: '2026-10-25',
@@ -62,7 +88,7 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
       };
 
       const triggerEpoch = computeTargetTriggerEpoch(reminder);
-      const expected = new Date(2026, 9, 25, 14, 15, 0).getTime();
+      const expected = new Date(2026, 9, 25, 14, 15, 20).getTime();
 
       assert.strictEqual(triggerEpoch, expected);
     });
