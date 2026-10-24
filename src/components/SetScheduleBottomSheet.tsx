@@ -23,7 +23,6 @@ const CENTER_OFFSET = ITEM_HEIGHT; // 46px
 
 const HOURS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const MINUTES = Array.from({ length: 60 }, (_, i) => i);
-const SECONDS = Array.from({ length: 60 }, (_, i) => i);
 const PERIODS: AmPm[] = ['AM', 'PM'];
 
 function toIsoString(d: Date): string {
@@ -212,7 +211,6 @@ function SetScheduleContent({
 
   const [hour, setHour] = useState<number>(() => initialParams?.hour ?? defaultTime.hour);
   const [minute, setMinute] = useState<number>(() => initialParams?.minute ?? defaultTime.minute);
-  const [second, setSecond] = useState<number>(() => initialParams?.second ?? 0);
   const [amPm, setAmPm] = useState<AmPm>(() => initialParams?.amPm ?? defaultTime.amPm);
   const [dateMode, setDateMode] = useState<'today' | 'tomorrow' | 'daily' | 'custom'>(() =>
     getInitialDateMode(initialParams?.date, todayStr, tomorrowStr)
@@ -284,7 +282,6 @@ function SetScheduleContent({
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       hour,
       minute,
-      second,
       amPm,
       recurrence,
       date: finalDate,
@@ -302,7 +299,6 @@ function SetScheduleContent({
 
   const selectedHourIndex = Math.max(0, HOURS.indexOf(hour));
   const selectedMinuteIndex = Math.max(0, MINUTES.indexOf(minute));
-  const selectedSecondIndex = Math.max(0, SECONDS.indexOf(second));
   const selectedPeriodIndex = Math.max(0, PERIODS.indexOf(amPm));
 
   // Custom date display string
@@ -367,7 +363,7 @@ function SetScheduleContent({
                 selectedIndex={selectedHourIndex}
                 formatItem={(h) => String(h).padStart(2, '0')}
                 onSelectIndex={(idx) => setHour(HOURS[idx])}
-                width={54}
+                width={68}
               />
 
               {/* Colon */}
@@ -381,25 +377,11 @@ function SetScheduleContent({
                 selectedIndex={selectedMinuteIndex}
                 formatItem={(m) => String(m).padStart(2, '0')}
                 onSelectIndex={(idx) => setMinute(MINUTES[idx])}
-                width={54}
-              />
-
-              {/* Colon */}
-              <View style={styles.colonWrap}>
-                <Text style={styles.colonText}>:</Text>
-              </View>
-
-              {/* Seconds */}
-              <WheelColumn<number>
-                items={SECONDS}
-                selectedIndex={selectedSecondIndex}
-                formatItem={(s) => String(s).padStart(2, '0')}
-                onSelectIndex={(idx) => setSecond(SECONDS[idx])}
-                width={54}
+                width={68}
               />
 
               {/* Space */}
-              <View style={{ width: 6 }} />
+              <View style={{ width: 14 }} />
 
               {/* Period */}
               <WheelColumn<AmPm>
@@ -407,7 +389,7 @@ function SetScheduleContent({
                 selectedIndex={selectedPeriodIndex}
                 formatItem={(p) => p}
                 onSelectIndex={(idx) => setAmPm(PERIODS[idx])}
-                width={52}
+                width={64}
               />
             </View>
 
