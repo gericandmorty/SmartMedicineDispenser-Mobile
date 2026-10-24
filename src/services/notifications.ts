@@ -77,18 +77,42 @@ export async function scheduleReminderNotification(reminder: Reminder): Promise<
       if (reminder.hour !== 12) hour24 = reminder.hour + 12;
     }
 
-    const id = await scheduleNotificationAsync({
-      content: {
-        title: '💊 Medicine Reminder',
-        body: "It's time for your scheduled medicine reminder.",
-        sound: true,
-      },
-      trigger: {
+    const bodyText = reminder.compartment
+      ? `It's time to take your medicine from ${reminder.compartment}.`
+      : "It's time for your scheduled medicine reminder.";
+
+    let triggerInput: any;
+
+    if (reminder.date) {
+      const [y, m, d] = reminder.date.split('-').map(Number);
+      const targetDate = new Date(y, m - 1, d, hour24, reminder.minute, 0);
+
+      // Only schedule if it's in the future
+      if (targetDate.getTime() > Date.now()) {
+        triggerInput = {
+          type: SchedulableTriggerInputTypes.DATE,
+          date: targetDate,
+          channelId: Platform.OS === 'android' ? DEFAULT_CHANNEL_ID : undefined,
+        };
+      } else {
+        return undefined;
+      }
+    } else {
+      triggerInput = {
         type: SchedulableTriggerInputTypes.DAILY,
         hour: hour24,
         minute: reminder.minute,
         channelId: Platform.OS === 'android' ? DEFAULT_CHANNEL_ID : undefined,
+      };
+    }
+
+    const id = await scheduleNotificationAsync({
+      content: {
+        title: '💊 Medicine Reminder',
+        body: bodyText,
+        sound: true,
       },
+      trigger: triggerInput,
     });
     return id;
   } catch (e) {
@@ -104,4 +128,69 @@ export async function cancelReminderNotification(notificationId: string): Promis
     console.warn('[notifications] Failed to cancel scheduled notification:', e);
   }
 }
+
+/**
+ * Schedule a local notification to alert the user that a column needs restocking
+ */
+export async function scheduleRestockNotification(
+  drawer: number,
+  column: string,
+  targetDate: Date
+): Promise<string | undefined> {
+  try {
+    const granted = await requestPermissions();
+    if (!granted) return undefined;
+
+    // Schedule for 9:00 AM on the target restock date (or immediately if today)
+    const alertTime = new Date(targetDate);
+    alertTime.setHours(9, 0, 0, 0);
+
+    const triggerDate = alertTime.getTime() > Date.now() ? alertTime : new Date(Date.now() + 5000);
+
+    const id = await scheduleNotificationAsync({
+      content: {
+        title: '📦 Medicine Restock Required',
+        body: `Drawer ${drawer} - Column ${column} is out of stock! It's time to refill your weekly medicine supply.`,
+        sound: true,
+      },
+      trigger: {
+        type: SchedulableTriggerInputTypes.DATE,
+        date: triggerDate,
+        channelId: Platform.OS === 'android' ? DEFAULT_CHANNEL_ID : undefined,
+      },
+    });
+    return id;
+  } catch (e) {
+    console.warn('[notifications] Failed to schedule restock notification:', e);
+    return undefined;
+  }
+}
+
+/**
+ * Fires an immediate local push notification alerting that a medicine column is out of stock
+ */
+export async function triggerImmediateRestockNotification(
+  drawer: number,
+  column: string
+): Promise<string | undefined> {
+  try {
+    const granted = await requestPermissions();
+    if (!granted) return undefined;
+
+    const id = await scheduleNotificationAsync({
+      content: {
+        title: '📦 Medicine Restock Required',
+        body: `Drawer ${drawer} - Column ${column} is out of stock! It's time to refill your weekly medicine supply.`,
+        sound: true,
+      },
+      trigger: null, // triggers immediately
+    });
+    return id;
+  } catch (e) {
+    console.warn('[notifications] Failed to trigger immediate restock notification:', e);
+    return undefined;
+  }
+}
+
+
 
