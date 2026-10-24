@@ -72,7 +72,7 @@ export default function CompartmentDetailModal({
 
   if (!visible || !reminder) return null;
 
-  const timeFormatted = reminder.second !== undefined
+  const timeFormatted = reminder.second !== undefined && reminder.second > 0
     ? `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')}:${String(reminder.second).padStart(2, '0')} ${reminder.amPm}`
     : `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')} ${reminder.amPm}`;
   const isDaily = !reminder.date || reminder.recurrence === 'every-day';

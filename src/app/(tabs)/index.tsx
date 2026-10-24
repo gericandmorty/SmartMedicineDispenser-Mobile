@@ -91,7 +91,7 @@ export default function HomeScreen() {
 
   const handleSaveSchedule = async (reminder: Reminder) => {
     await add(reminder);
-    const timeFormatted = reminder.second !== undefined
+    const timeFormatted = reminder.second !== undefined && reminder.second > 0
       ? `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')}:${String(reminder.second).padStart(2, '0')} ${reminder.amPm}`
       : `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')} ${reminder.amPm}`;
     showToast(`Schedule set for ${timeFormatted}`);
