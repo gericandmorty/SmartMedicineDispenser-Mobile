@@ -1,6 +1,6 @@
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Reminder, HardwareStatus, DoseEvent } from '../types/reminder';
+import { Reminder, HardwareStatus, DoseEvent, DoseResolution } from '../types/reminder';
 
 const ARDUINO_IP_KEY = '@arduino_wifi_ip';
 export const DEFAULT_ARDUINO_IP = '10.146.105.91';
@@ -179,7 +179,7 @@ export async function pingESP32(targetIP?: string): Promise<{ ok: boolean; error
 export async function fetchHardwareStatus(targetIP?: string): Promise<HardwareStatus | null> {
   const ip = targetIP || (await getArduinoIP());
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3000);
+  const timeoutId = setTimeout(() => controller.abort(), 2000);
 
   try {
     const res = await fetch(`http://${ip}/status`, {
@@ -198,12 +198,14 @@ export async function fetchHardwareStatus(targetIP?: string): Promise<HardwareSt
 }
 
 /**
- * Fetch hardware event history buffer over Wi-Fi (for offline recovery)
+ * Fetch hardware event history buffer over Wi-Fi (ESP32 is the event history master)
  */
 export async function fetchHardwareEvents(targetIP?: string, limit: number = 10): Promise<DoseEvent[]> {
-  const ip = targetIP || (await getArduinoIP());
+  const esp32IP = await getESP32IP();
+  const arduinoIP = await getArduinoIP();
+  const ip = targetIP || esp32IP || arduinoIP;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3500);
+  const timeoutId = setTimeout(() => controller.abort(), 2500);
 
   try {
     const res = await fetch(`http://${ip}/events?limit=${limit}`, {
@@ -212,13 +214,115 @@ export async function fetchHardwareEvents(targetIP?: string, limit: number = 10)
     clearTimeout(timeoutId);
     if (res.ok) {
       const data = await res.json();
-      return (data.events || []) as DoseEvent[];
+      const rawEvents: any[] = data.events || [];
+      return rawEvents.map((e) => ({
+        eventId: e.eventId || e.event_id || `evt_${Date.now()}`,
+        scheduleId: e.scheduleId || e.schedule_id || '',
+        compartment: e.compartment || '',
+        slotIndex: e.slotIndex ?? e.slot_index ?? 0,
+        triggerDate:
+          e.triggerDate ||
+          (e.trigger_time ? e.trigger_time.split(' ')[0] : new Date().toISOString().split('T')[0]),
+        scheduledTimeFormatted: e.scheduledTimeFormatted || e.trigger_time || '',
+        targetTriggerEpoch: e.targetTriggerEpoch ?? 0,
+        resolvedAtEpoch: e.resolvedAtEpoch ?? Math.floor(Date.now() / 1000),
+        resolution: (e.resolution?.toUpperCase() === 'TAKEN'
+          ? 'TAKEN'
+          : e.resolution?.toUpperCase() === 'MISSED'
+          ? 'MISSED'
+          : 'TAKEN') as DoseResolution,
+        elapsedSeconds: e.elapsedSeconds ?? e.elapsed_seconds ?? 0,
+      }));
     }
     return [];
   } catch {
     clearTimeout(timeoutId);
     return [];
   }
+}
+
+export interface HardwareDoseCheckResult {
+  resolved: boolean;
+  resolution?: DoseResolution;
+  elapsedSeconds?: number;
+}
+
+/**
+ * Polls hardware controllers (ESP32 events & status, Arduino status) to detect if
+ * the user pulled the drawer, retrieved the medicine, and closed the drawer.
+ */
+export async function checkHardwareDoseResolved(
+  reminder: Reminder
+): Promise<HardwareDoseCheckResult> {
+  const esp32IP = await getESP32IP();
+  const arduinoIP = await getArduinoIP();
+
+  const extractLabel = (str?: string) => {
+    if (!str) return '';
+    const m = str.match(/\(([^)]+)\)/);
+    return m ? m[1].trim().toUpperCase() : str.trim().toUpperCase();
+  };
+
+  const targetLabel = extractLabel(reminder.compartment);
+
+  // 1. Check ESP32 event history buffer (Primary authoritative source for TAKEN events)
+  try {
+    const events = await fetchHardwareEvents(esp32IP, 5);
+    if (events && events.length > 0) {
+      for (const ev of events) {
+        if (ev.resolution === 'TAKEN') {
+          const idMatch = ev.scheduleId && ev.scheduleId === reminder.id;
+          const evLabel = extractLabel(ev.compartment);
+          const compMatch =
+            targetLabel &&
+            (evLabel === targetLabel ||
+              ev.compartment?.toUpperCase().includes(targetLabel) ||
+              (reminder.compartment && reminder.compartment.toUpperCase().includes(evLabel)));
+
+          if (idMatch || compMatch) {
+            return {
+              resolved: true,
+              resolution: 'TAKEN',
+              elapsedSeconds: ev.elapsedSeconds ?? 0,
+            };
+          }
+        }
+      }
+    }
+  } catch {}
+
+  // 2. Check ESP32 active_alert status
+  try {
+    const espStatus = await fetchHardwareStatus(esp32IP);
+    if (espStatus && espStatus.status === 'online') {
+      if (espStatus.active_alert && espStatus.active_alert.is_alerting === false && espStatus.is_vibrating === false) {
+        // Query Arduino status to confirm no alert is active
+        const ardStatus = await fetchHardwareStatus(arduinoIP);
+        if (ardStatus && (ardStatus as any).is_alerting === false && (ardStatus as any).active_alerts === 0) {
+          return {
+            resolved: true,
+            resolution: 'TAKEN',
+          };
+        }
+      }
+    }
+  } catch {}
+
+  // 3. Check Arduino status for direct reed switch drawer closure confirmation
+  try {
+    const ardStatus = await fetchHardwareStatus(arduinoIP);
+    if (ardStatus && (ardStatus as any).status === 'online') {
+      const raw = ardStatus as any;
+      if (raw.last_dose_taken === true && (raw.last_taken_ms_ago === undefined || raw.last_taken_ms_ago < 90000)) {
+        return {
+          resolved: true,
+          resolution: 'TAKEN',
+        };
+      }
+    }
+  } catch {}
+
+  return { resolved: false };
 }
 
 /**

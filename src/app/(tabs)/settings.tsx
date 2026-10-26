@@ -23,7 +23,7 @@ import {
 import { useReminders } from '../../hooks/useReminders';
 
 export default function SettingsScreen() {
-  const { triggerManualTestAlert } = useReminders();
+  const { triggerManualTestAlert, clearAll, refresh } = useReminders();
 
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -83,6 +83,7 @@ export default function SettingsScreen() {
 
   const handleSeedPhasedOut = async () => {
     await seedPhasedOutMedicineData();
+    await refresh();
     Alert.alert(
       '📦 0/7 Doses Inserted & Push Notification Sent',
       'Drawer 1 Column A now has 0/7 doses remaining.\n\nA push notification was triggered to your phone\'s notification bar!'
@@ -91,20 +92,21 @@ export default function SettingsScreen() {
 
   const handleResetStock = async () => {
     await recordColumnRefill(1, 'A');
+    await refresh();
     Alert.alert('🔄 Stock Reset', 'Drawer 1 Column A refilled to 7/7 doses.');
   };
 
   const handleClearDatabase = async () => {
     Alert.alert(
       'Clear SQLite Database',
-      'Are you sure you want to clear all reminders and history from the SQLite database?',
+      'Are you sure you want to clear all reminders and history from the SQLite database? This will completely wipe stale and active schedules.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Clear All',
           style: 'destructive',
           onPress: async () => {
-            await clearAllMedicineData();
+            await clearAll();
             Alert.alert('Database Cleared', 'All reminders and dose history have been cleared.');
           },
         },

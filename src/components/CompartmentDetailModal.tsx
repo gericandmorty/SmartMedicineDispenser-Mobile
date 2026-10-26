@@ -9,7 +9,8 @@ import {
   Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Reminder, ColumnStockStatus } from '../types/reminder';
+import { Reminder, ColumnStockStatus, DoseEvent } from '../types/reminder';
+import { calculateDoseOccurrence } from '../services/medicationLogic';
 
 interface Props {
   visible: boolean;
@@ -18,6 +19,7 @@ interface Props {
   row: string;         // '1' - '3'
   reminder?: Reminder;
   stockStatus?: ColumnStockStatus;
+  doseHistory?: DoseEvent[];
   onClose: () => void;
   onDispense: (reminder: Reminder) => void;
   onChangeTime: (reminder: Reminder) => void;
@@ -32,6 +34,7 @@ export default function CompartmentDetailModal({
   row,
   reminder,
   stockStatus,
+  doseHistory = [],
   onClose,
   onDispense,
   onChangeTime,
@@ -85,6 +88,12 @@ export default function CompartmentDetailModal({
   const isOut = stockStatus?.isOutOfStock ?? false;
   const isLow = stockStatus?.isLowStock ?? false;
 
+  // Dose Occurrence status for today
+  const occurrence = reminder ? calculateDoseOccurrence(reminder, Date.now(), doseHistory) : undefined;
+  const isDoseMissed = occurrence?.state === 'MISSED';
+  const isDoseAlerting = occurrence?.state === 'ALERTING';
+  const isDoseTaken = occurrence?.state === 'TAKEN' || occurrence?.state === 'TAKEN_MANUAL';
+
   return (
     <Modal
       visible={visible}
@@ -109,7 +118,7 @@ export default function CompartmentDetailModal({
           <View style={styles.header}>
             <View style={styles.headerLeft}>
               <View style={styles.slotBadge}>
-                <View style={styles.ledDot} />
+                <View style={[styles.ledDot, isDoseMissed && { backgroundColor: '#DC2626' }]} />
                 <Text style={styles.slotBadgeText}>
                   Drawer {drawerIndex + 1} • {col}{row}
                 </Text>
@@ -128,23 +137,64 @@ export default function CompartmentDetailModal({
           </View>
 
           {/* Time & Schedule Details Hero */}
-          <View style={styles.timeHero}>
-            <View style={styles.timeIconWrap}>
-              <Ionicons name="alarm-outline" size={26} color="#166534" />
+          <View style={[styles.timeHero, isDoseMissed && styles.timeHeroMissed]}>
+            <View style={[styles.timeIconWrap, isDoseMissed && styles.timeIconWrapMissed]}>
+              <Ionicons
+                name={isDoseMissed ? 'alert-circle' : 'alarm-outline'}
+                size={26}
+                color={isDoseMissed ? '#DC2626' : '#166534'}
+              />
             </View>
             <View style={styles.timeTextCol}>
-              <Text style={styles.timeBig}>{timeFormatted}</Text>
+              <Text style={[styles.timeBig, isDoseMissed && { color: '#991B1B' }]}>{timeFormatted}</Text>
               <View style={styles.recurrenceRow}>
                 <Ionicons
                   name={isDaily ? 'repeat-outline' : 'calendar-outline'}
                   size={13}
-                  color="#15803D"
+                  color={isDoseMissed ? '#DC2626' : '#15803D'}
                   style={{ marginRight: 4 }}
                 />
-                <Text style={styles.recurrenceLabel}>{recurrenceText}</Text>
+                <Text style={[styles.recurrenceLabel, isDoseMissed && { color: '#DC2626' }]}>
+                  {recurrenceText}
+                </Text>
               </View>
             </View>
           </View>
+
+          {/* Dose Status Notice Banner */}
+          {isDoseMissed && (
+            <View style={styles.missedNoticeBox}>
+              <Ionicons name="alert-circle" size={20} color="#DC2626" style={{ marginRight: 8 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.missedNoticeTitle}>⚠️ Dosage Missed</Text>
+                <Text style={styles.missedNoticeDesc}>
+                  20 minutes have passed since {timeFormatted} without intake confirmation.
+                </Text>
+              </View>
+            </View>
+          )}
+          {isDoseAlerting && (
+            <View style={styles.alertingNoticeBox}>
+              <Ionicons name="alarm" size={20} color="#D97706" style={{ marginRight: 8 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.alertingNoticeTitle}>🔔 Time to Take Medicine</Text>
+                <Text style={styles.alertingNoticeDesc}>
+                  Grace window active: {Math.ceil(occurrence.remainingSeconds / 60)} minutes remaining.
+                </Text>
+              </View>
+            </View>
+          )}
+          {isDoseTaken && (
+            <View style={styles.takenNoticeBox}>
+              <Ionicons name="checkmark-circle" size={20} color="#15803D" style={{ marginRight: 8 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.takenNoticeTitle}>✓ Today's Dose Completed</Text>
+                <Text style={styles.takenNoticeDesc}>
+                  Medicine intake was recorded successfully.
+                </Text>
+              </View>
+            </View>
+          )}
 
           {/* Stock & Inventory Card */}
           <View style={styles.stockCard}>
@@ -330,7 +380,11 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingVertical: 14,
     paddingHorizontal: 16,
-    marginBottom: 14,
+    marginBottom: 12,
+  },
+  timeHeroMissed: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FCA5A5',
   },
   timeIconWrap: {
     width: 44,
@@ -340,6 +394,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 14,
+  },
+  timeIconWrapMissed: {
+    backgroundColor: '#FEE2E2',
   },
   timeTextCol: {
     flex: 1,
@@ -359,6 +416,67 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#166534',
+  },
+  missedNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.5,
+    borderColor: '#F87171',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+  },
+  missedNoticeTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#B91C1C',
+  },
+  missedNoticeDesc: {
+    fontSize: 11,
+    color: '#991B1B',
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  alertingNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1.5,
+    borderColor: '#FDE68A',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+  },
+  alertingNoticeTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#92400E',
+  },
+  alertingNoticeDesc: {
+    fontSize: 11,
+    color: '#78350F',
+    marginTop: 2,
+  },
+  takenNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1.5,
+    borderColor: '#86EFAC',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+  },
+  takenNoticeTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#15803D',
+  },
+  takenNoticeDesc: {
+    fontSize: 11,
+    color: '#166534',
+    marginTop: 2,
   },
   stockCard: {
     backgroundColor: '#F9FAFB',
