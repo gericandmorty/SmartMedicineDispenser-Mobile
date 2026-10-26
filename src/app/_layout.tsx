@@ -2,6 +2,7 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
+import { RemindersProvider } from '../hooks/useReminders';
 
 try {
   SplashScreen.preventAutoHideAsync();
@@ -33,7 +34,7 @@ export default function RootLayout() {
   if (!ready) return null;
 
   return (
-    <>
+    <RemindersProvider>
       <StatusBar style="dark" />
       <Stack
         screenOptions={{
@@ -49,6 +50,6 @@ export default function RootLayout() {
         <Stack.Screen name="set-time" />
         <Stack.Screen name="confirmation" />
       </Stack>
-    </>
+    </RemindersProvider>
   );
 }
