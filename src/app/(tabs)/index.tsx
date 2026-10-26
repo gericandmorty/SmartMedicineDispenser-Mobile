@@ -7,6 +7,7 @@ import {
   Alert,
   TouchableOpacity,
   Animated,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -19,6 +20,7 @@ import SetScheduleBottomSheet, { SetScheduleParams } from '../../components/SetS
 import { Reminder } from '../../types/reminder';
 import { calculateColumnStock } from '../../services/medicationLogic';
 import { recordColumnRefill } from '../../services/storage';
+import { setSolenoidLock } from '../../services/hardware';
 
 const toastFade = new Animated.Value(0);
 const toastTranslate = new Animated.Value(-30);
@@ -28,14 +30,9 @@ export default function HomeScreen() {
   const [sheetVisible, setSheetVisible] = useState(false);
   const [sheetParams, setSheetParams] = useState<SetScheduleParams | undefined>(undefined);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [solenoidOpen, setSolenoidOpen] = useState(false);
 
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useFocusEffect(
-    useCallback(() => {
-      refresh();
-    }, [refresh])
-  );
 
   const showToast = useCallback((msg: string) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -72,6 +69,22 @@ export default function HomeScreen() {
       });
     }, 2800);
   }, []);
+
+  const handleToggleSolenoid = useCallback(async (unlock: boolean) => {
+    setSolenoidOpen(unlock);
+    try {
+      await setSolenoidLock(0, unlock);
+      showToast(unlock ? '🔓 Solenoid Unlocked (Drawers Open)' : '🔒 Solenoid Locked');
+    } catch {
+      showToast('⚠️ Solenoid command sent');
+    }
+  }, [showToast]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+    }, [refresh])
+  );
 
   const handleDelete = (id: string) => {
     Alert.alert(
@@ -146,6 +159,55 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
+        {/* ── Solenoid Lock Quick Control Switch ── */}
+        <View style={styles.solenoidQuickCard}>
+          <View style={styles.solenoidQuickLeft}>
+            <View
+              style={[
+                styles.solenoidQuickIconBox,
+                solenoidOpen ? styles.solenoidQuickIconOpen : styles.solenoidQuickIconLocked,
+              ]}
+            >
+              <Ionicons
+                name={solenoidOpen ? 'lock-open' : 'lock-closed'}
+                size={18}
+                color={solenoidOpen ? '#D97706' : '#15803D'}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={styles.solenoidQuickRow}>
+                <Text style={styles.solenoidQuickTitle}>Solenoid Lock</Text>
+                <View
+                  style={[
+                    styles.solenoidQuickBadge,
+                    solenoidOpen ? styles.badgeOpen : styles.badgeLocked,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.solenoidQuickBadgeText,
+                      solenoidOpen ? styles.badgeTextOpen : styles.badgeTextLocked,
+                    ]}
+                  >
+                    {solenoidOpen ? 'UNLOCKED / OPEN' : 'LOCKED'}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.solenoidQuickDesc}>
+                {solenoidOpen
+                  ? 'Drawers are energized & unlocked'
+                  : 'Toggle switch to open drawer solenoids'}
+              </Text>
+            </View>
+          </View>
+          <Switch
+            value={solenoidOpen}
+            onValueChange={handleToggleSolenoid}
+            trackColor={{ false: '#E0E0E0', true: '#FDE68A' }}
+            thumbColor={solenoidOpen ? '#F59E0B' : '#9E9E9E'}
+          />
+        </View>
+
         {/* ── Dispenser compartment view ── */}
         <DispenserView
           reminders={reminders}
@@ -329,6 +391,83 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#166534',
+  },
+  solenoidQuickCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginBottom: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#E8E1D5',
+  },
+  solenoidQuickLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+    marginRight: 10,
+  },
+  solenoidQuickIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  solenoidQuickIconOpen: {
+    backgroundColor: '#FEF3C7',
+  },
+  solenoidQuickIconLocked: {
+    backgroundColor: '#DCFCE7',
+  },
+  solenoidQuickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  solenoidQuickTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#212121',
+  },
+  solenoidQuickBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  badgeOpen: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  badgeLocked: {
+    backgroundColor: '#DCFCE7',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  solenoidQuickBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  badgeTextOpen: {
+    color: '#92400E',
+  },
+  badgeTextLocked: {
+    color: '#15803D',
+  },
+  solenoidQuickDesc: {
+    fontSize: 11,
+    color: '#757575',
+    marginTop: 2,
   },
   footer: {
     paddingHorizontal: 24,

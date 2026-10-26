@@ -1,4 +1,12 @@
-import { useState, useEffect, useCallback, startTransition } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  startTransition,
+  useMemo,
+} from 'react';
 import { Reminder, DoseEvent, DoseResolution } from '../types/reminder';
 import {
   loadReminders,
@@ -19,7 +27,9 @@ import {
   syncScheduleToESP32,
   deleteScheduleFromESP32,
   triggerHardwareAlert,
+  silenceAlertOrConfirm,
 } from '../services/hardware';
+import MedicationAlertModal from '../components/MedicationAlertModal';
 
 function sortReminders(data: Reminder[]): Reminder[] {
   return [...data].sort((a, b) => {
@@ -37,10 +47,35 @@ function sortReminders(data: Reminder[]): Reminder[] {
   });
 }
 
-export function useReminders() {
+export interface RemindersContextType {
+  reminders: Reminder[];
+  doseHistory: DoseEvent[];
+  loading: boolean;
+  refresh: () => Promise<void>;
+  flushSyncQueue: () => Promise<void>;
+  add: (reminder: Reminder) => Promise<Reminder[]>;
+  remove: (id: string) => Promise<void>;
+  resolveDose: (reminder: Reminder, resolution: DoseResolution) => Promise<DoseEvent>;
+  seedPhasedOut: () => Promise<void>;
+  clearAll: () => Promise<void>;
+  // Medication Alert Modal states
+  activeAlertReminder: Reminder | null;
+  alertModalVisible: boolean;
+  confirmAlertDose: (reminder: Reminder) => Promise<void>;
+  dismissAlertModal: () => void;
+  triggerManualTestAlert: (customReminder?: Reminder) => void;
+}
+
+const RemindersContext = createContext<RemindersContextType | null>(null);
+
+export function RemindersProvider({ children }: { children: React.ReactNode }) {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [doseHistory, setDoseHistory] = useState<DoseEvent[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Active Alert Modal State
+  const [activeAlertReminder, setActiveAlertReminder] = useState<Reminder | null>(null);
+  const [alertModalVisible, setAlertModalVisible] = useState(false);
 
   const refresh = useCallback(async () => {
     let remData = await loadReminders();
@@ -84,7 +119,7 @@ export function useReminders() {
     });
   }, [refresh, flushSyncQueue]);
 
-  // Live watchdog: when scheduled time arrives on phone, trigger hardware buzzer over Wi-Fi
+  // Live watchdog: when scheduled time arrives, trigger hardware buzzer over Wi-Fi AND show flashing modal
   useEffect(() => {
     if (reminders.length === 0) return;
 
@@ -110,8 +145,14 @@ export function useReminders() {
             alertedSet.add(key);
             const comp = r.compartment || 'Drawer 1 (A1)';
             const drawer = comp.includes('Drawer 2') ? 2 : 1;
-            console.log(`[Watchdog] ⏰ Scheduled time hit for ${comp}! Triggering hardware buzzer...`);
+            console.log(`[Watchdog] ⏰ Scheduled time hit for ${comp}! Triggering hardware alert & modal...`);
+
+            // 1. Trigger hardware alarm
             triggerHardwareAlert(comp, drawer).catch(() => {});
+
+            // 2. Open Flashing Modal
+            setActiveAlertReminder(r);
+            setAlertModalVisible(true);
           }
         }
       }
@@ -189,16 +230,103 @@ export function useReminders() {
     await refresh();
   }, [refresh]);
 
-  return {
-    reminders,
-    doseHistory,
-    loading,
-    refresh,
-    flushSyncQueue,
-    add,
-    remove,
-    resolveDose,
-    seedPhasedOut,
-    clearAll,
-  };
+  // Modal actions
+  const confirmAlertDose = useCallback(
+    async (reminder: Reminder) => {
+      await resolveDose(reminder, 'TAKEN');
+      silenceAlertOrConfirm(reminder.id).catch(() => {});
+      setAlertModalVisible(false);
+      setActiveAlertReminder(null);
+    },
+    [resolveDose]
+  );
+
+  const dismissAlertModal = useCallback(() => {
+    if (activeAlertReminder) {
+      silenceAlertOrConfirm(activeAlertReminder.id).catch(() => {});
+    }
+    setAlertModalVisible(false);
+    setActiveAlertReminder(null);
+  }, [activeAlertReminder]);
+
+  const triggerManualTestAlert = useCallback(
+    (customReminder?: Reminder) => {
+      const target =
+        customReminder ||
+        reminders[0] || {
+          id: `test_${Date.now()}`,
+          hour: 8,
+          minute: 30,
+          second: 0,
+          amPm: 'AM',
+          recurrence: 'every-day',
+          compartment: 'Drawer 1 (A1)',
+          slotIndex: 0,
+        };
+
+      const drawer = target.compartment?.includes('Drawer 2') ? 2 : 1;
+      triggerHardwareAlert(target.compartment || 'Drawer 1 (A1)', drawer).catch(() => {});
+      setActiveAlertReminder(target);
+      setAlertModalVisible(true);
+    },
+    [reminders]
+  );
+
+  const value = useMemo(
+    () => ({
+      reminders,
+      doseHistory,
+      loading,
+      refresh,
+      flushSyncQueue,
+      add,
+      remove,
+      resolveDose,
+      seedPhasedOut,
+      clearAll,
+      activeAlertReminder,
+      alertModalVisible,
+      confirmAlertDose,
+      dismissAlertModal,
+      triggerManualTestAlert,
+    }),
+    [
+      reminders,
+      doseHistory,
+      loading,
+      refresh,
+      flushSyncQueue,
+      add,
+      remove,
+      resolveDose,
+      seedPhasedOut,
+      clearAll,
+      activeAlertReminder,
+      alertModalVisible,
+      confirmAlertDose,
+      dismissAlertModal,
+      triggerManualTestAlert,
+    ]
+  );
+
+  return (
+    <RemindersContext.Provider value={value}>
+      {children}
+      {/* Root Flashing Medication Alert Modal */}
+      <MedicationAlertModal
+        visible={alertModalVisible}
+        reminder={activeAlertReminder}
+        onConfirmDose={confirmAlertDose}
+        onDismiss={dismissAlertModal}
+      />
+    </RemindersContext.Provider>
+  );
+}
+
+export function useReminders(): RemindersContextType {
+  const context = useContext(RemindersContext);
+  if (!context) {
+    throw new Error('useReminders must be used within a RemindersProvider');
+  }
+  return context;
 }
