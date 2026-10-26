@@ -402,3 +402,45 @@ export async function triggerBuzzerRelayTest(): Promise<boolean> {
   const ip = await getArduinoIP();
   return nativeHttpGet(`http://${ip}/buzzer`, 6000);
 }
+
+/**
+ * Switch / Control solenoid lock on or off (Drawer 1 on Pin 8, Drawer 2 on Pin 9)
+ * @param drawer 1 (Drawer 1), 2 (Drawer 2), or 0 (Both)
+ * @param unlock true to unlock/energize, false to lock/de-energize
+ */
+export async function setSolenoidLock(drawer: 1 | 2 | 0 = 0, unlock: boolean): Promise<boolean> {
+  const arduinoIP = await getArduinoIP();
+  const esp32IP = await getESP32IP();
+  const stateStr = unlock ? 'unlock' : 'lock';
+  const query = `?drawer=${drawer}&state=${stateStr}`;
+
+  const sendTo = async (ip: string) => {
+    if (!ip) return false;
+    const ok = await nativeHttpGet(`http://${ip}/solenoid${query}`, 3000);
+    if (!ok && unlock) {
+      // Fallback to /dispense endpoint if /solenoid not yet running
+      return nativeHttpGet(`http://${ip}/dispense?drawer=${drawer}`, 3000);
+    }
+    return ok;
+  };
+
+  const [ardOk, espOk] = await Promise.all([sendTo(arduinoIP), sendTo(esp32IP)]);
+  return ardOk || espOk;
+}
+
+/**
+ * Pulse unlock solenoid for 5 seconds (Drawer 1, Drawer 2, or Both)
+ */
+export async function pulseUnlockSolenoid(drawer: 1 | 2 | 0 = 0): Promise<boolean> {
+  const arduinoIP = await getArduinoIP();
+  const esp32IP = await getESP32IP();
+
+  const sendTo = async (ip: string) => {
+    if (!ip) return false;
+    return nativeHttpGet(`http://${ip}/dispense?drawer=${drawer}`, 3500);
+  };
+
+  const [ardOk, espOk] = await Promise.all([sendTo(arduinoIP), sendTo(esp32IP)]);
+  return ardOk || espOk;
+}
+

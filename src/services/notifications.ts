@@ -34,25 +34,32 @@ try {
   console.warn('[notifications] Failed to set notification handler:', e);
 }
 
-// Ensure notification channel is configured for Android 8.0+
-if (Platform.OS === 'android') {
+let channelConfigured = false;
+
+/**
+ * Safely ensure Android notification channel is configured on Android 8.0+
+ * Called lazily when app is ready to prevent NullPointerException on Android startup
+ */
+export async function ensureNotificationChannel(): Promise<void> {
+  if (Platform.OS !== 'android' || channelConfigured) return;
   try {
-    setNotificationChannelAsync(DEFAULT_CHANNEL_ID, {
+    await setNotificationChannelAsync(DEFAULT_CHANNEL_ID, {
       name: 'Medicine Reminders',
       importance: AndroidImportance.HIGH,
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#4CAF50',
       sound: 'default',
-    }).catch((err) => {
-      console.warn('[notifications] Failed to create Android notification channel:', err);
     });
+    channelConfigured = true;
   } catch (e) {
-    console.warn('[notifications] setNotificationChannelAsync unavailable:', e);
+    // Safely catch if ChannelsProvider is not yet ready or in Expo Go
+    console.warn('[notifications] Notification channel setup deferred:', e);
   }
 }
 
 export async function requestPermissions(): Promise<boolean> {
   try {
+    ensureNotificationChannel().catch(() => {});
     const existing = await getPermissionsAsync();
     if (existing.status === 'granted') return true;
 
