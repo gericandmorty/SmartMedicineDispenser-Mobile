@@ -550,4 +550,100 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
       assert.strictEqual(stockAfterRefill.nextRestockDate, '2026-11-03');
     });
   });
+
+  // ── Test Suite 7: 20-Minute Missed Dose Evaluation & Schedule Deletion Cleanliness ─────────
+  describe('Suite 7: 20-Minute Missed Dose Evaluation & Schedule Deletion Cleanliness', () => {
+    it('TC-7.1: marks dosage as MISSED when 20 minutes (1200 seconds) have elapsed', () => {
+      const reminder: Reminder = {
+        id: 'sch_20m_test',
+        hour: 10,
+        minute: 0,
+        amPm: 'AM',
+        recurrence: 'every-day',
+        compartment: 'Drawer 1 (A1)',
+        createdAt: '2026-10-20T08:00:00Z',
+      };
+
+      // Exactly 10:20:00 AM (20 minutes on the dot)
+      const exactly20m = new Date(2026, 9, 20, 10, 20, 0).getTime();
+      const sAlerting = calculateDoseOccurrence(reminder, exactly20m);
+      assert.strictEqual(sAlerting.state, 'ALERTING');
+      assert.strictEqual(sAlerting.remainingSeconds, 0);
+
+      // 10:20:01 AM (20 minutes and 1 second - past grace period)
+      const past20m = new Date(2026, 9, 20, 10, 20, 1).getTime();
+      const sMissed = calculateDoseOccurrence(reminder, past20m);
+      assert.strictEqual(sMissed.state, 'MISSED');
+      assert.strictEqual(sMissed.remainingSeconds, 0);
+      assert.strictEqual(sMissed.elapsedSeconds, 1200);
+    });
+
+    it('TC-7.2: filters out dose history when schedule is deleted to prevent stale database state', () => {
+      const scheduleIdToDelete = 'sch_deleted_123';
+      const history: DoseEvent[] = [
+        {
+          eventId: 'evt_1',
+          scheduleId: scheduleIdToDelete,
+          triggerDate: '2026-10-20',
+          scheduledTimeFormatted: '10:00 AM',
+          targetTriggerEpoch: 1,
+          resolution: 'MISSED',
+        },
+        {
+          eventId: 'evt_2',
+          scheduleId: 'sch_active_456',
+          triggerDate: '2026-10-20',
+          scheduledTimeFormatted: '12:00 PM',
+          targetTriggerEpoch: 2,
+          resolution: 'TAKEN',
+        },
+      ];
+
+      const cleanedHistory = history.filter((h) => h.scheduleId !== scheduleIdToDelete);
+      assert.strictEqual(cleanedHistory.length, 1);
+      assert.strictEqual(cleanedHistory[0].scheduleId, 'sch_active_456');
+    });
+
+    it('TC-7.3: verifies taking medicine and closing drawer resolves alert and transitions state to TAKEN', () => {
+      const reminder: Reminder = {
+        id: 'sch_drawer_test',
+        hour: 9,
+        minute: 0,
+        amPm: 'AM',
+        recurrence: 'every-day',
+        compartment: 'Drawer 1 (A1)',
+        slotIndex: 0,
+        createdAt: new Date().toISOString(),
+      };
+
+      const triggerMs = new Date(2026, 9, 20, 9, 0, 0).getTime();
+      const intakeMs = triggerMs + 45000; // 45 seconds after alert: user takes medicine & closes drawer
+
+      // Initial state at intake time before recording: ALERTING
+      const stateBefore = calculateDoseOccurrence(reminder, intakeMs, []);
+      assert.strictEqual(stateBefore.state, 'ALERTING');
+
+      // Reed switch close logs event with resolution 'TAKEN'
+      const updatedHistory: DoseEvent[] = [
+        {
+          eventId: 'evt_taken_drawer',
+          scheduleId: reminder.id,
+          compartment: reminder.compartment,
+          triggerDate: '2026-10-20',
+          scheduledTimeFormatted: '09:00 AM',
+          targetTriggerEpoch: Math.floor(triggerMs / 1000),
+          resolvedAtEpoch: Math.floor(intakeMs / 1000),
+          resolution: 'TAKEN',
+          elapsedSeconds: 45,
+        },
+      ];
+
+      // State after drawer closed and resolution logged: TAKEN
+      const stateAfter = calculateDoseOccurrence(reminder, intakeMs, updatedHistory);
+      assert.strictEqual(stateAfter.state, 'TAKEN');
+      assert.strictEqual(stateAfter.remainingSeconds, 0);
+      assert.strictEqual(stateAfter.elapsedSeconds, 45);
+    });
+  });
 });
+

@@ -199,5 +199,27 @@ export async function triggerImmediateRestockNotification(
   }
 }
 
+/**
+ * Fires an immediate local push notification alerting that a scheduled dosage was missed (20 minutes passed)
+ */
+export async function triggerImmediateMissedNotification(
+  compartment: string
+): Promise<string | undefined> {
+  try {
+    const granted = await requestPermissions();
+    if (!granted) return undefined;
 
-
+    const id = await scheduleNotificationAsync({
+      content: {
+        title: '⚠️ Medicine Dosage Missed',
+        body: `20 minutes have passed without intake. Your dose for ${compartment} has been recorded as missed.`,
+        sound: true,
+      },
+      trigger: null, // triggers immediately
+    });
+    return id;
+  } catch (e) {
+    console.warn('[notifications] Failed to trigger immediate missed notification:', e);
+    return undefined;
+  }
+}

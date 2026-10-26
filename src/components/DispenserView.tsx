@@ -9,7 +9,7 @@ import {
 import { router } from 'expo-router';
 import { Reminder, AmPm, DoseEvent } from '../types/reminder';
 import { triggerHardwareDispense } from '../services/hardware';
-import { calculateColumnStock } from '../services/medicationLogic';
+import { calculateColumnStock, calculateDoseOccurrence } from '../services/medicationLogic';
 import { Ionicons } from '@expo/vector-icons';
 import CompartmentDetailModal from './CompartmentDetailModal';
 
@@ -24,7 +24,7 @@ const COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 const ROWS = ['1', '2', '3'];
 
 // ─── Pulsing LED ─────────────────────────────────────────────────────────────
-function LED({ active, isOutOfStock }: { active: boolean; isOutOfStock?: boolean }) {
+function LED({ active, isOutOfStock, isMissed }: { active: boolean; isOutOfStock?: boolean; isMissed?: boolean }) {
   const ring  = useMemo(() => new Animated.Value(1), []);
   const ringO = useMemo(() => new Animated.Value(0), []);
 
@@ -42,8 +42,8 @@ function LED({ active, isOutOfStock }: { active: boolean; isOutOfStock?: boolean
   }, [active, ring, ringO]);
 
   const DOT = 8;
-  const pulseColor = isOutOfStock ? '#EF4444' : '#4CAF50';
-  const dotColor = isOutOfStock ? '#FF5252' : '#76FF03';
+  const pulseColor = isMissed || isOutOfStock ? '#EF4444' : '#4CAF50';
+  const dotColor = isMissed || isOutOfStock ? '#FF5252' : '#76FF03';
 
   return (
     <View style={{ width: DOT, height: DOT, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
@@ -73,6 +73,7 @@ function Cell({
   row,
   active,
   isOutOfStock,
+  isMissed,
   reminder,
   onPress,
 }: {
@@ -80,6 +81,7 @@ function Cell({
   row: string;
   active: boolean;
   isOutOfStock?: boolean;
+  isMissed?: boolean;
   reminder?: Reminder;
   onPress: () => void;
 }) {
@@ -92,25 +94,25 @@ function Cell({
     <TouchableOpacity
       style={[
         s.cell,
-        active && (isOutOfStock ? s.cellOutOfStock : s.cellActive),
+        active && (isMissed || isOutOfStock ? s.cellOutOfStock : s.cellActive),
       ]}
       onPress={onPress}
       activeOpacity={0.7}
       delayPressIn={0}
       hitSlop={{ top: 4, bottom: 4, left: 1, right: 1 }}
       accessibilityRole="button"
-      accessibilityLabel={`Compartment ${col}${row}${isOutOfStock ? ' (Out of stock)' : ''}`}
+      accessibilityLabel={`Compartment ${col}${row}${isMissed ? ' (Dosage Missed)' : isOutOfStock ? ' (Out of stock)' : ''}`}
     >
       <View style={s.cellHeader} pointerEvents="none">
         <Text
           style={[
             s.cellLbl,
-            active && (isOutOfStock ? s.cellLblOutOfStock : s.cellLblActive),
+            active && (isMissed || isOutOfStock ? s.cellLblOutOfStock : s.cellLblActive),
           ]}
         >
           {col}{row}
         </Text>
-        <LED active={active} isOutOfStock={isOutOfStock} />
+        <LED active={active} isOutOfStock={isOutOfStock} isMissed={isMissed} />
       </View>
 
       {active ? (
@@ -118,7 +120,7 @@ function Cell({
           <Text
             style={[
               s.cellTime,
-              isOutOfStock && s.cellTimeOutOfStock,
+              (isMissed || isOutOfStock) && s.cellTimeOutOfStock,
             ]}
             numberOfLines={1}
           >
@@ -127,11 +129,11 @@ function Cell({
           <Text
             style={[
               s.cellAmPm,
-              isOutOfStock && s.cellAmPmOutOfStock,
+              (isMissed || isOutOfStock) && s.cellAmPmOutOfStock,
             ]}
             numberOfLines={1}
           >
-            {isOutOfStock ? 'EMPTY' : amPm}
+            {isMissed ? 'MISSED' : isOutOfStock ? 'EMPTY' : amPm}
           </Text>
         </View>
       ) : (
@@ -273,6 +275,9 @@ function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSe
               const isOutOfStock = reminder
                 ? calculateColumnStock(reminder, doseHistory).isOutOfStock
                 : false;
+              const isMissed = reminder
+                ? calculateDoseOccurrence(reminder, Date.now(), doseHistory).state === 'MISSED'
+                : false;
 
               return (
                 <Cell
@@ -281,6 +286,7 @@ function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSe
                   row={row}
                   active={!!reminder}
                   isOutOfStock={isOutOfStock}
+                  isMissed={isMissed}
                   reminder={reminder}
                   onPress={() => handleCellPress(col, row, ri, ci)}
                 />
@@ -349,6 +355,7 @@ export default function DispenserView({
         row={selectedCell?.row ?? '1'}
         reminder={selectedCell?.reminder}
         stockStatus={selectedStock}
+        doseHistory={doseHistory}
         onClose={() => setSelectedCell(null)}
         onDispense={(rem) => triggerHardwareDispense(rem)}
         onChangeTime={(rem) => {
