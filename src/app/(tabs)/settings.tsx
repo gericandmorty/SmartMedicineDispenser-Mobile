@@ -14,6 +14,11 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   setSolenoidLock,
   pulseUnlockSolenoid,
+  autoDiscoverHardware,
+  getArduinoIP,
+  getESP32IP,
+  pingArduino,
+  pingESP32,
 } from '../../services/hardware';
 import {
   seedPhasedOutMedicineData,
@@ -27,6 +32,44 @@ export default function SettingsScreen() {
 
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
+
+  // Hardware IP & Auto-Discovery states
+  const [arduinoIP, setArduinoIP] = useState<string>('');
+  const [esp32IP, setESP32IP] = useState<string>('');
+  const [discovering, setDiscovering] = useState<boolean>(false);
+
+  React.useEffect(() => {
+    Promise.all([getArduinoIP(), getESP32IP()]).then(([ard, esp]) => {
+      setArduinoIP(ard);
+      setESP32IP(esp);
+    });
+  }, []);
+
+  const handleAutoDiscover = async () => {
+    setDiscovering(true);
+    try {
+      const res = await autoDiscoverHardware();
+      const ard = await getArduinoIP();
+      const esp = await getESP32IP();
+      setArduinoIP(ard);
+      setESP32IP(esp);
+      if (res.found) {
+        Alert.alert(
+          '✅ Dispenser Auto-Discovered!',
+          `Successfully connected to hardware on local Wi-Fi:\n\n• Arduino Uno R4: ${ard}\n• ESP32 Master: ${esp}`
+        );
+      } else {
+        Alert.alert(
+          '🔍 Auto-Discovery Completed',
+          `Current endpoints:\n• Arduino Uno R4: ${ard}\n• ESP32 Master: ${esp}\n\nEnsure dispenser hardware is powered on and connected to the same Wi-Fi SSID.`
+        );
+      }
+    } catch (err: any) {
+      Alert.alert('Scan Status', err?.message || 'Auto-discovery finished.');
+    } finally {
+      setDiscovering(false);
+    }
+  };
 
   // Solenoid control states
   const [solenoidOpen, setSolenoidOpen] = useState(false);
@@ -248,6 +291,55 @@ export default function SettingsScreen() {
               <Ionicons name="alarm" size={17} color="#15803D" style={{ marginRight: 6 }} />
               <Text style={styles.testModalBtnText}>
                 🚨 Test Medicine Alarm (Flashing Modal)
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* ── Wi-Fi Auto-Discovery ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Wi-Fi Auto-Discovery & Status</Text>
+          <View style={styles.card}>
+            <Text style={styles.settingLabel}>Zero-Config Hardware Discovery</Text>
+            <Text style={styles.settingDesc}>
+              Auto-locks onto the Arduino Uno R4 WiFi and ESP32 Master on your network via UDP beacons.
+            </Text>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12, marginBottom: 12 }}>
+              <View style={[styles.endpointBadge, { flex: 1 }]}>
+                <Ionicons name="hardware-chip-outline" size={16} color="#166534" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.endpointTitle}>Arduino Uno R4</Text>
+                  <Text style={styles.endpointIP} numberOfLines={1}>
+                    {arduinoIP || 'Scanning...'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.endpointBadge, { flex: 1 }]}>
+                <Ionicons name="wifi-outline" size={16} color="#1E40AF" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.endpointTitle}>ESP32 Master</Text>
+                  <Text style={styles.endpointIP} numberOfLines={1}>
+                    {esp32IP || 'Scanning...'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.actionBtn, { backgroundColor: '#EAF7EE', borderColor: '#2E9E4B' }]}
+              onPress={handleAutoDiscover}
+              disabled={discovering}
+              activeOpacity={0.8}
+            >
+              {discovering ? (
+                <ActivityIndicator size="small" color="#2E9E4B" style={{ marginRight: 8 }} />
+              ) : (
+                <Ionicons name="search" size={17} color="#2E9E4B" style={{ marginRight: 8 }} />
+              )}
+              <Text style={[styles.actionBtnText, { color: '#166534' }]}>
+                {discovering ? 'Auto-Detecting Devices...' : '🔍 Auto-Discover Dispenser on Network'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -591,5 +683,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#1B5E20',
+  },
+  endpointBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    gap: 8,
+  },
+  endpointTitle: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+  },
+  endpointIP: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#111827',
+    marginTop: 2,
   },
 });

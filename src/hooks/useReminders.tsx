@@ -35,6 +35,7 @@ import {
   triggerHardwareAlert,
   silenceAlertOrConfirm,
   checkHardwareDoseResolved,
+  autoDiscoverHardware,
 } from '../services/hardware';
 import MedicationAlertModal from '../components/MedicationAlertModal';
 
@@ -117,6 +118,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     refresh().then(() => {
       flushSyncQueue().catch(() => {});
+      autoDiscoverHardware().catch(() => {});
     });
   }, [refresh, flushSyncQueue]);
 
