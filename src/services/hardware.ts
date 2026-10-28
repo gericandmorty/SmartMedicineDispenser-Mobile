@@ -1,5 +1,6 @@
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Network from 'expo-network';
 import { Reminder, HardwareStatus, DoseEvent, DoseResolution } from '../types/reminder';
 
 const ARDUINO_IP_KEY = '@arduino_wifi_ip';
@@ -81,6 +82,126 @@ export async function saveESP32IP(ip: string): Promise<void> {
   } catch {
     // Ignore error
   }
+}
+
+/**
+ * Auto-Discovers the ESP32-Mini and Arduino Uno R4 WiFi on the local Wi-Fi network.
+ * 1. Checks mDNS (dispenser.local).
+ * 2. If reached, extracts both ESP32 IP and Arduino R4 IP (learned via UDP beacon).
+ * 3. Probes current saved IPs and default candidate IPs.
+ * Automatically saves discovered IPs to AsyncStorage!
+ */
+export async function autoDiscoverHardware(): Promise<{
+  arduinoIP?: string;
+  esp32IP?: string;
+  found: boolean;
+}> {
+  let discoveredESP32: string | undefined;
+  let discoveredArduino: string | undefined;
+
+  const checkEndpoint = async (ipOrHost: string): Promise<'esp32' | 'arduino' | null> => {
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 850);
+      const res = await fetch(`http://${ipOrHost}/status`, { signal: controller.signal });
+      clearTimeout(id);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.device === 'ESP32-Mini-Dispenser' || data.device === 'ESP32-Mini') {
+          const rawIp = data.ip ? sanitizeIP(data.ip) : sanitizeIP(ipOrHost);
+          discoveredESP32 = rawIp;
+          await saveESP32IP(rawIp);
+          if (data.arduino_ip) {
+            const ardClean = sanitizeIP(data.arduino_ip);
+            if (ardClean) {
+              discoveredArduino = ardClean;
+              await saveArduinoIP(ardClean);
+            }
+          }
+          return 'esp32';
+        }
+        if (data.device === 'Arduino-Controller') {
+          const rawIp = sanitizeIP(ipOrHost);
+          discoveredArduino = rawIp;
+          await saveArduinoIP(rawIp);
+          if (data.esp32_ip) {
+            const espClean = sanitizeIP(data.esp32_ip);
+            if (espClean) {
+              discoveredESP32 = espClean;
+              await saveESP32IP(espClean);
+            }
+          }
+          return 'arduino';
+        }
+      }
+    } catch {}
+    return null;
+  };
+
+  // 1. Try mDNS
+  await checkEndpoint('dispenser.local');
+  if (discoveredESP32 && discoveredArduino) {
+    return { arduinoIP: discoveredArduino, esp32IP: discoveredESP32, found: true };
+  }
+
+  // 2. Try saved & default candidate IPs
+  const currentArd = await getArduinoIP();
+  const currentEsp = await getESP32IP();
+  const priorityList = Array.from(
+    new Set([
+      currentEsp,
+      currentArd,
+      DEFAULT_ESP32_IP,
+      DEFAULT_ARDUINO_IP,
+      '192.168.1.13',
+      '192.168.1.50',
+      '192.168.1.100',
+      '192.168.0.13',
+      '192.168.0.50',
+    ])
+  );
+
+  await Promise.all(priorityList.map((ip) => checkEndpoint(ip)));
+  if (discoveredESP32 && discoveredArduino) {
+    return { arduinoIP: discoveredArduino, esp32IP: discoveredESP32, found: true };
+  }
+
+  // 3. Full sweep of the phone's OWN subnet (works on any router or hotspot:
+  //    192.168.x.x, 10.x.x.x, 172.20.10.x (iPhone), 192.168.43.x (Android), etc.)
+  const subnets: string[] = [];
+  try {
+    const phoneIP = await Network.getIpAddressAsync();
+    const p = (phoneIP || '').split('.');
+    if (p.length === 4 && phoneIP !== '0.0.0.0') {
+      subnets.push(`${p[0]}.${p[1]}.${p[2]}.`);
+    }
+  } catch {}
+
+  // Fallback subnets (common routers + phone hotspots) if phone IP is unavailable
+  if (subnets.length === 0) {
+    subnets.push('192.168.1.', '192.168.0.', '192.168.43.', '172.20.10.', '10.146.105.');
+  }
+
+  const candidates: string[] = [];
+  for (const s of subnets) {
+    for (let i = 1; i <= 254; i++) {
+      const ip = `${s}${i}`;
+      if (!priorityList.includes(ip)) candidates.push(ip);
+    }
+  }
+
+  // Probe in parallel chunks of 32
+  for (let i = 0; i < candidates.length; i += 32) {
+    if (discoveredESP32 && discoveredArduino) break;
+    const chunk = candidates.slice(i, i + 32);
+    await Promise.all(chunk.map((c) => checkEndpoint(c)));
+  }
+
+  return {
+    arduinoIP: discoveredArduino,
+    esp32IP: discoveredESP32,
+    found: Boolean(discoveredArduino || discoveredESP32),
+  };
 }
 
 /**
@@ -419,6 +540,7 @@ export async function syncScheduleToESP32(reminder: Reminder): Promise<boolean> 
   const esp32IP = await getESP32IP();
 
   const clientEpoch = Math.floor(Date.now() / 1000);
+  const resolvedDrawer = reminder.compartment?.includes('Drawer 2') || (reminder.slotIndex ?? 0) >= 21 ? 2 : 1;
   const params = new URLSearchParams({
     id: reminder.id,
     hour: String(reminder.hour),
@@ -427,8 +549,9 @@ export async function syncScheduleToESP32(reminder: Reminder): Promise<boolean> 
     amPm: reminder.amPm,
     recurrence: reminder.recurrence,
     date: reminder.date || '',
-    compartment: reminder.compartment || '',
-    slotIndex: String(reminder.slotIndex ?? 0),
+    compartment: reminder.compartment || (resolvedDrawer === 2 ? 'Drawer 2 (A1)' : 'Drawer 1 (A1)'),
+    drawer: String(resolvedDrawer),
+    slotIndex: String(reminder.slotIndex ?? (resolvedDrawer === 2 ? 21 : 0)),
     client_epoch: String(clientEpoch),
   });
 
@@ -483,19 +606,28 @@ export async function silenceAlertOrConfirm(scheduleId?: string): Promise<boolea
 }
 
 /**
- * Trigger immediate alert: Rings Arduino Buzzer (Pin 7) + Unlocks Solenoid (Pin 8) + Vibrates ESP32 (GPIO 4)
+ * Trigger immediate alert: Rings Arduino Buzzer (Pin 7) + Unlocks Solenoid (Pin 8 or 9) + Vibrates ESP32 (GPIO 4)
  */
 export async function triggerHardwareAlert(compartment: string = 'Drawer 1 (A1)', drawer: number = 1): Promise<boolean> {
   const arduinoIP = await getArduinoIP();
   const esp32IP = await getESP32IP();
 
+  const resolvedDrawer = compartment.includes('Drawer 2') || drawer === 2 ? 2 : 1;
+
   const sendArduinoAlert = () =>
-    nativeHttpGet(`http://${arduinoIP}/alert?compartment=${encodeURIComponent(compartment)}&drawer=${drawer}`, 3500);
+    nativeHttpGet(`http://${arduinoIP}/alert?compartment=${encodeURIComponent(compartment)}&drawer=${resolvedDrawer}`, 3500);
 
-  const sendESP32Vibrate = () =>
-    nativeHttpGet(`http://${esp32IP}/vibrate?duration=3000&pulses=3`, 3500);
+  // Send to both /alert and /vibrate on ESP32 to guarantee 60-second vibration alert fires
+  const sendESP32Alert = async () => {
+    if (!esp32IP) return false;
+    const ok = await nativeHttpGet(`http://${esp32IP}/alert?compartment=${encodeURIComponent(compartment)}&drawer=${resolvedDrawer}`, 3500);
+    if (!ok) {
+      return nativeHttpGet(`http://${esp32IP}/vibrate?duration=60000&pulses=1`, 3500);
+    }
+    return ok;
+  };
 
-  const [ardOk, espOk] = await Promise.all([sendArduinoAlert(), sendESP32Vibrate()]);
+  const [ardOk, espOk] = await Promise.all([sendArduinoAlert(), sendESP32Alert()]);
   return ardOk || espOk;
 }
 
