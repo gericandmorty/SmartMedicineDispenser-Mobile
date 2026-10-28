@@ -13,11 +13,13 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Reminder } from '../types/reminder';
 import { setSolenoidLock } from '../services/hardware';
+import { computeTargetTriggerEpoch } from '../services/medicationLogic';
 
 interface Props {
   visible: boolean;
   reminder: Reminder | null;
   onConfirmDose: (reminder: Reminder) => void;
+  onMissedDose?: (reminder: Reminder) => void;
   onDismiss: () => void;
 }
 
@@ -27,6 +29,7 @@ export default function MedicationAlertModal({
   visible,
   reminder,
   onConfirmDose,
+  onMissedDose,
   onDismiss,
 }: Props) {
   // Animation values
@@ -38,10 +41,11 @@ export default function MedicationAlertModal({
   const modalFade = useRef(new Animated.Value(0)).current;
 
   // Solenoid switch state
-  const [solenoidOpen, setSolenoidOpen] = useState(true); // Auto-open solenoid when alert fires
+  const [solenoidOpen, setSolenoidOpen] = useState(true);
   const [solenoidLoading, setSolenoidLoading] = useState(false);
 
-  // Countdown timer (20 minutes)
+  // Missed dose state & Countdown timer (20 minutes)
+  const [isMissed, setIsMissed] = useState(false);
   const [remainingSec, setRemainingSec] = useState(TOTAL_GRACE_PERIOD_SEC);
 
   // Determine drawer from compartment label
@@ -55,16 +59,32 @@ export default function MedicationAlertModal({
       : `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')} ${reminder.amPm}`
     : '--:--';
 
-  // Flashing & Pulsing Loop
+  // Flashing & Pulsing Loop + Countdown
   useEffect(() => {
     let flashLoop: Animated.CompositeAnimation | null = null;
     let beaconLoop: Animated.CompositeAnimation | null = null;
     let timer: ReturnType<typeof setInterval> | null = null;
 
-    if (visible) {
-      // Auto-unlock solenoid when medication alert fires
-      setSolenoidOpen(true);
-      setSolenoidLock(drawerNum, true).catch(() => {});
+    if (visible && reminder) {
+      // Calculate remaining grace period
+      const triggerEpochMs = computeTargetTriggerEpoch(reminder, new Date());
+      const diffMs = Date.now() - triggerEpochMs;
+      const initialRemaining = Math.max(0, Math.floor((TOTAL_GRACE_PERIOD_SEC * 1000 - diffMs) / 1000));
+      const alreadyMissed = diffMs > TOTAL_GRACE_PERIOD_SEC * 1000;
+
+      if (alreadyMissed || initialRemaining <= 0) {
+        setIsMissed(true);
+        setRemainingSec(0);
+        setSolenoidOpen(false);
+        setSolenoidLock(drawerNum, false).catch(() => {});
+        onMissedDose?.(reminder);
+      } else {
+        setIsMissed(false);
+        setRemainingSec(initialRemaining);
+        // Auto-unlock solenoid when medication alert fires within grace period
+        setSolenoidOpen(true);
+        setSolenoidLock(drawerNum, true).catch(() => {});
+      }
 
       // Haptic/vibration feedback
       if (Platform.OS !== 'web') {
@@ -148,21 +168,27 @@ export default function MedicationAlertModal({
       );
       beaconLoop.start();
 
-      // Grace period 20-min countdown
-      setRemainingSec(TOTAL_GRACE_PERIOD_SEC);
-      timer = setInterval(() => {
-        setRemainingSec((prev) => {
-          if (prev <= 1) {
-            if (timer) clearInterval(timer);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
+      // Grace period 20-min countdown timer
+      if (!alreadyMissed && initialRemaining > 0) {
+        timer = setInterval(() => {
+          setRemainingSec((prev) => {
+            if (prev <= 1) {
+              if (timer) clearInterval(timer);
+              setIsMissed(true);
+              setSolenoidOpen(false);
+              setSolenoidLock(drawerNum, false).catch(() => {});
+              onMissedDose?.(reminder);
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+      }
     } else {
       modalFade.setValue(0);
       modalScale.setValue(0.9);
       flashAnim.setValue(0);
+      setIsMissed(false);
     }
 
     return () => {
@@ -170,7 +196,7 @@ export default function MedicationAlertModal({
       if (beaconLoop) beaconLoop.stop();
       if (timer) clearInterval(timer);
     };
-  }, [visible, drawerNum]);
+  }, [visible, reminder, drawerNum, onMissedDose]);
 
   // Handle Solenoid toggle switch
   const handleToggleSolenoid = async (val: boolean) => {
@@ -231,13 +257,39 @@ export default function MedicationAlertModal({
               },
             ]}
           >
-            {/* Flashing Top Banner */}
-            <Animated.View style={[styles.flashBanner, { backgroundColor: bannerFlashBg }]}>
-              <View style={styles.flashDot} />
-              <Animated.Text style={[styles.flashBannerText, { color: bannerFlashText }]}>
-                ⏰ TIME TO TAKE YOUR MEDICINE!
+            {/* Top Banner (Flashing when alerting, Solid red when missed) */}
+            <Animated.View
+              style={[
+                styles.flashBanner,
+                isMissed
+                  ? { backgroundColor: '#FEE2E2' }
+                  : { backgroundColor: bannerFlashBg },
+              ]}
+            >
+              <View
+                style={[
+                  styles.flashDot,
+                  isMissed && { backgroundColor: '#DC2626' },
+                ]}
+              />
+              <Animated.Text
+                style={[
+                  styles.flashBannerText,
+                  isMissed
+                    ? { color: '#B91C1C' }
+                    : { color: bannerFlashText },
+                ]}
+              >
+                {isMissed
+                  ? '⚠️ 20 MINS PASSED — DOSAGE IS MISSED'
+                  : '⏰ TIME TO TAKE YOUR MEDICINE!'}
               </Animated.Text>
-              <View style={styles.flashDot} />
+              <View
+                style={[
+                  styles.flashDot,
+                  isMissed && { backgroundColor: '#DC2626' },
+                ]}
+              />
             </Animated.View>
 
           {/* Animated Pulsing Beacon Icon */}
@@ -245,6 +297,7 @@ export default function MedicationAlertModal({
             <Animated.View
               style={[
                 styles.beaconRing,
+                isMissed && { backgroundColor: '#FECACA' },
                 {
                   transform: [{ scale: beaconScale }],
                   opacity: beaconOpacity,
@@ -254,19 +307,28 @@ export default function MedicationAlertModal({
             <Animated.View
               style={[
                 styles.iconCircle,
+                isMissed && { backgroundColor: '#DC2626', shadowColor: '#DC2626' },
                 {
                   transform: [{ scale: pulseScale }],
                 },
               ]}
             >
-              <Ionicons name="medical" size={42} color="#FFFFFF" />
+              <Ionicons
+                name={isMissed ? 'close-circle' : 'medical'}
+                size={42}
+                color="#FFFFFF"
+              />
             </Animated.View>
           </View>
 
           {/* Main Titles */}
-          <Text style={styles.headline}>Medication Scheduled Now</Text>
+          <Text style={[styles.headline, isMissed && { color: '#991B1B' }]}>
+            {isMissed ? 'Dosage is Missed' : 'Medication Scheduled Now'}
+          </Text>
           <Text style={styles.subheadline}>
-            Please take your dose from the unlocked dispenser compartment.
+            {isMissed
+              ? '20 minutes have passed without intake. This scheduled dosage has been marked as missed.'
+              : 'Please take your dose from the unlocked dispenser compartment.'}
           </Text>
 
           {/* Compartment & Schedule Highlight Card */}
@@ -276,9 +338,26 @@ export default function MedicationAlertModal({
                 <Ionicons name="cube" size={20} color="#166534" />
                 <Text style={styles.detailTitle}>Compartment</Text>
               </View>
-              <View style={styles.compartmentChip}>
-                <View style={styles.ledDotLive} />
-                <Text style={styles.compartmentText}>{compLabel}</Text>
+              <View
+                style={[
+                  styles.compartmentChip,
+                  isMissed && { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.ledDotLive,
+                    isMissed && { backgroundColor: '#DC2626' },
+                  ]}
+                />
+                <Text
+                  style={[
+                    styles.compartmentText,
+                    isMissed && { color: '#B91C1C' },
+                  ]}
+                >
+                  {compLabel}
+                </Text>
               </View>
             </View>
 
@@ -330,7 +409,7 @@ export default function MedicationAlertModal({
                 <Text style={styles.solenoidSubtitle}>
                   {solenoidOpen
                     ? `Drawer ${drawerNum} solenoid is energized & open.`
-                    : `Switch ON to unlock Drawer ${drawerNum}.`}
+                    : `Drawer ${drawerNum} is locked.`}
                 </Text>
               </View>
             </View>
@@ -348,8 +427,15 @@ export default function MedicationAlertModal({
           <View style={styles.countdownSection}>
             <View style={styles.countdownRow}>
               <Text style={styles.countdownLabel}>Dispenser Grace Period:</Text>
-              <Text style={styles.countdownDigits}>
-                {String(minsLeft).padStart(2, '0')}:{String(secsLeft).padStart(2, '0')}
+              <Text
+                style={[
+                  styles.countdownDigits,
+                  isMissed && { color: '#DC2626' },
+                ]}
+              >
+                {isMissed
+                  ? '00:00 (EXPIRED)'
+                  : `${String(minsLeft).padStart(2, '0')}:${String(secsLeft).padStart(2, '0')}`}
               </Text>
             </View>
             <View style={styles.progressTrack}>
@@ -357,8 +443,12 @@ export default function MedicationAlertModal({
                 style={[
                   styles.progressBar,
                   {
-                    width: `${progressPct}%`,
-                    backgroundColor: remainingSec < 300 ? '#EF4444' : '#10B981',
+                    width: isMissed ? '100%' : `${progressPct}%`,
+                    backgroundColor: isMissed
+                      ? '#DC2626'
+                      : remainingSec < 300
+                      ? '#EF4444'
+                      : '#10B981',
                   },
                 ]}
               />
@@ -367,25 +457,51 @@ export default function MedicationAlertModal({
 
           {/* Action Buttons */}
           <View style={styles.actionSection}>
-            {/* Primary: Confirm Taken */}
-            <TouchableOpacity
-              style={styles.confirmBtn}
-              onPress={() => onConfirmDose(reminder)}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="checkmark-circle" size={22} color="#FFFFFF" style={{ marginRight: 8 }} />
-              <Text style={styles.confirmBtnText}>I HAVE TAKEN THIS MEDICINE</Text>
-            </TouchableOpacity>
+            {isMissed ? (
+              <>
+                {/* Acknowledge Missed Dose */}
+                <TouchableOpacity
+                  style={[styles.confirmBtn, { backgroundColor: '#DC2626', shadowColor: '#DC2626' }]}
+                  onPress={onDismiss}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="checkmark-done" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+                  <Text style={styles.confirmBtnText}>ACKNOWLEDGE MISSED DOSE</Text>
+                </TouchableOpacity>
 
-            {/* Secondary: Dismiss / Snooze */}
-            <TouchableOpacity
-              style={styles.dismissBtn}
-              onPress={onDismiss}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="alarm-outline" size={17} color="#6B7280" style={{ marginRight: 6 }} />
-              <Text style={styles.dismissBtnText}>Snooze / Remind Later</Text>
-            </TouchableOpacity>
+                {/* Optional Late Intake */}
+                <TouchableOpacity
+                  style={styles.dismissBtn}
+                  onPress={() => onConfirmDose(reminder)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="medkit-outline" size={17} color="#475569" style={{ marginRight: 6 }} />
+                  <Text style={styles.dismissBtnText}>Take Anyway (Late Intake)</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                {/* Primary: Confirm Taken */}
+                <TouchableOpacity
+                  style={styles.confirmBtn}
+                  onPress={() => onConfirmDose(reminder)}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="checkmark-circle" size={22} color="#FFFFFF" style={{ marginRight: 8 }} />
+                  <Text style={styles.confirmBtnText}>I HAVE TAKEN THIS MEDICINE</Text>
+                </TouchableOpacity>
+
+                {/* Secondary: Dismiss / Snooze */}
+                <TouchableOpacity
+                  style={styles.dismissBtn}
+                  onPress={onDismiss}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="alarm-outline" size={17} color="#6B7280" style={{ marginRight: 6 }} />
+                  <Text style={styles.dismissBtnText}>Snooze / Remind Later</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </Animated.View>
         </Animated.View>

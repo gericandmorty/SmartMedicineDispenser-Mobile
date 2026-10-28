@@ -110,11 +110,12 @@ export async function sqliteSaveReminder(reminder: Reminder): Promise<void> {
 }
 
 /**
- * SQLite: Delete a reminder
+ * SQLite: Delete a reminder and its associated dose history
  */
 export async function sqliteDeleteReminder(id: string): Promise<void> {
   const db = await getDatabase();
   await db.runAsync('DELETE FROM reminders WHERE id = ?', [id]);
+  await db.runAsync('DELETE FROM dose_history WHERE scheduleId = ?', [id]);
 }
 
 /**
@@ -204,5 +205,6 @@ export async function sqliteClearAll(): Promise<void> {
     DELETE FROM reminders;
     DELETE FROM dose_history;
     DELETE FROM column_refills;
+    VACUUM;
   `);
 }

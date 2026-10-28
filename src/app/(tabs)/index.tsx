@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -79,6 +79,16 @@ export default function HomeScreen() {
       showToast('⚠️ Solenoid command sent');
     }
   }, [showToast]);
+
+  const [tick, setTick] = useState(0);
+
+  // Periodic 10-second tick to update countdown badges and missed states in real-time
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTick((t) => t + 1);
+    }, 10000);
+    return () => clearInterval(timer);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -254,6 +264,7 @@ export default function HomeScreen() {
                 key={r.id}
                 reminder={r}
                 stockStatus={stock}
+                doseHistory={doseHistory}
                 onDelete={handleDelete}
               />
             );

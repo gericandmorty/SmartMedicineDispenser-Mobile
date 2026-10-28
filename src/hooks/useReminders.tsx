@@ -20,14 +20,22 @@ import {
   clearAllMedicineData,
 } from '../services/storage';
 import {
+  calculateDoseOccurrence,
+  GRACE_PERIOD_MS,
+  computeTargetTriggerEpoch,
+} from '../services/medicationLogic';
+import {
   scheduleReminderNotification,
   cancelReminderNotification,
+  triggerImmediateMissedNotification,
 } from '../services/notifications';
 import {
   syncScheduleToESP32,
   deleteScheduleFromESP32,
   triggerHardwareAlert,
   silenceAlertOrConfirm,
+  checkHardwareDoseResolved,
+  autoDiscoverHardware,
 } from '../services/hardware';
 import MedicationAlertModal from '../components/MedicationAlertModal';
 
@@ -62,6 +70,7 @@ export interface RemindersContextType {
   activeAlertReminder: Reminder | null;
   alertModalVisible: boolean;
   confirmAlertDose: (reminder: Reminder) => Promise<void>;
+  missAlertDose: (reminder: Reminder) => Promise<void>;
   dismissAlertModal: () => void;
   triggerManualTestAlert: (customReminder?: Reminder) => void;
 }
@@ -78,15 +87,8 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
   const [alertModalVisible, setAlertModalVisible] = useState(false);
 
   const refresh = useCallback(async () => {
-    let remData = await loadReminders();
-    let histData = await loadDoseHistory();
-
-    // Auto-seed 0/7 doses phased out data on initial fresh start
-    if (remData.length === 0 && histData.length === 0) {
-      await seedPhasedOutMedicineData();
-      remData = await loadReminders();
-      histData = await loadDoseHistory();
-    }
+    const remData = await loadReminders();
+    const histData = await loadDoseHistory();
 
     const sorted = sortReminders(remData);
     startTransition(() => {
@@ -116,10 +118,12 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     refresh().then(() => {
       flushSyncQueue().catch(() => {});
+      autoDiscoverHardware().catch(() => {});
     });
   }, [refresh, flushSyncQueue]);
 
-  // Live watchdog: when scheduled time arrives, trigger hardware buzzer over Wi-Fi AND show flashing modal
+  // Live watchdog: when scheduled time arrives, trigger hardware buzzer over Wi-Fi AND show flashing modal.
+  // Also evaluates 20-minute window: if 20 mins have passed without intake, automatically marks dose as MISSED.
   useEffect(() => {
     if (reminders.length === 0) return;
 
@@ -127,6 +131,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
 
     const interval = setInterval(() => {
       const now = new Date();
+      const nowMs = now.getTime();
       const curHour = now.getHours();
       const curMin = now.getMinutes();
       const curSec = now.getSeconds();
@@ -139,7 +144,14 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
         const targetSec = r.second ?? 0;
         const secMatch = r.second === undefined || Math.abs(curSec - targetSec) <= 1;
 
+        // 1. Scheduled alert trigger: exactly at alarm time
         if (rHour === curHour && r.minute === curMin && secMatch) {
+          // Verify dose has not already been taken today
+          const occ = calculateDoseOccurrence(r, nowMs, doseHistory);
+          if (occ.state === 'TAKEN' || occ.state === 'TAKEN_MANUAL') {
+            continue;
+          }
+
           const key = `${r.id}-${now.toDateString()}-${curHour}:${curMin}:${targetSec}`;
           if (!alertedSet.has(key)) {
             alertedSet.add(key);
@@ -147,19 +159,36 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
             const drawer = comp.includes('Drawer 2') ? 2 : 1;
             console.log(`[Watchdog] ⏰ Scheduled time hit for ${comp}! Triggering hardware alert & modal...`);
 
-            // 1. Trigger hardware alarm
             triggerHardwareAlert(comp, drawer).catch(() => {});
-
-            // 2. Open Flashing Modal
             setActiveAlertReminder(r);
             setAlertModalVisible(true);
+          }
+        }
+
+        // 2. 20-Minute Window Watchdog: If 20 mins passed, mark as MISSED in database & notify
+        const occ = calculateDoseOccurrence(r, nowMs, doseHistory);
+        if (occ.state === 'MISSED') {
+          const alreadyLogged = doseHistory.some(
+            (h) => h.scheduleId === r.id && h.triggerDate === occ.triggerDate
+          );
+          if (!alreadyLogged) {
+            console.log(`[Watchdog] ⚠️ 20 minutes passed for schedule ${r.id}! Marking dosage as MISSED.`);
+            recordDoseResolution(r, 'MISSED', occ.targetTriggerEpochMs + GRACE_PERIOD_MS)
+              .then(async () => {
+                const updatedHistory = await loadDoseHistory();
+                startTransition(() => {
+                  setDoseHistory(updatedHistory);
+                });
+                triggerImmediateMissedNotification(r.compartment || 'Dispenser').catch(() => {});
+              })
+              .catch(() => {});
           }
         }
       }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [reminders]);
+  }, [reminders, doseHistory]);
 
   const add = useCallback(async (reminder: Reminder): Promise<Reminder[]> => {
     const notificationId = await scheduleReminderNotification(reminder);
@@ -197,9 +226,11 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
       await cancelReminderNotification(target.notificationId);
     }
     const updated = await deleteReminder(id);
+    const updatedHistory = await loadDoseHistory();
     const sorted = sortReminders(updated);
     startTransition(() => {
       setReminders(sorted);
+      setDoseHistory(updatedHistory);
     });
 
     // Remove schedule from ESP32 Mini over Wi-Fi
@@ -220,6 +251,58 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  // Active Alert Auto-Dismiss Watchdog:
+  // When alertModalVisible is true, actively poll hardware (ESP32 and Arduino)
+  // to detect when the medicine was taken and the drawer was pushed closed, and automatically dismiss the modal.
+  useEffect(() => {
+    if (!alertModalVisible || !activeAlertReminder) return;
+
+    let isSubscribed = true;
+
+    const pollHardwareForDoseIntake = async () => {
+      if (!isSubscribed) return;
+
+      try {
+        // 1. Check local dose history: if already marked taken today, dismiss modal immediately
+        const occ = calculateDoseOccurrence(activeAlertReminder, Date.now(), doseHistory);
+        if (occ.state === 'TAKEN' || occ.state === 'TAKEN_MANUAL') {
+          console.log(`[AlertWatchdog] Dose for ${activeAlertReminder.id} was taken. Closing modal.`);
+          setAlertModalVisible(false);
+          setActiveAlertReminder(null);
+          return;
+        }
+
+        // 2. Query hardware controllers (ESP32 events & status, Arduino status)
+        const hwResult = await checkHardwareDoseResolved(activeAlertReminder);
+        if (!isSubscribed) return;
+
+        if (hwResult.resolved) {
+          console.log(
+            `[AlertWatchdog] 💊 Medicine retrieved and drawer closed on hardware for ${activeAlertReminder.id}! Auto-dismissing modal.`
+          );
+          // Record dose resolution in local SQLite database
+          await resolveDose(activeAlertReminder, hwResult.resolution || 'TAKEN');
+          // Silence hardware alert buzzer & vibration if still active
+          silenceAlertOrConfirm(activeAlertReminder.id).catch(() => {});
+          // Auto-dismiss the alert modal immediately
+          setAlertModalVisible(false);
+          setActiveAlertReminder(null);
+        }
+      } catch (err) {
+        // Ignore transient network errors during poll
+      }
+    };
+
+    // Run immediate check then every 1.2 seconds while modal is up
+    pollHardwareForDoseIntake();
+    const interval = setInterval(pollHardwareForDoseIntake, 1200);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
+  }, [alertModalVisible, activeAlertReminder, doseHistory, resolveDose]);
+
   const seedPhasedOut = useCallback(async () => {
     await seedPhasedOutMedicineData();
     await refresh();
@@ -237,6 +320,15 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
       silenceAlertOrConfirm(reminder.id).catch(() => {});
       setAlertModalVisible(false);
       setActiveAlertReminder(null);
+    },
+    [resolveDose]
+  );
+
+  const missAlertDose = useCallback(
+    async (reminder: Reminder) => {
+      await resolveDose(reminder, 'MISSED');
+      silenceAlertOrConfirm(reminder.id).catch(() => {});
+      triggerImmediateMissedNotification(reminder.compartment || 'Dispenser').catch(() => {});
     },
     [resolveDose]
   );
@@ -287,6 +379,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
       activeAlertReminder,
       alertModalVisible,
       confirmAlertDose,
+      missAlertDose,
       dismissAlertModal,
       triggerManualTestAlert,
     }),
@@ -304,6 +397,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
       activeAlertReminder,
       alertModalVisible,
       confirmAlertDose,
+      missAlertDose,
       dismissAlertModal,
       triggerManualTestAlert,
     ]
@@ -317,6 +411,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
         visible={alertModalVisible}
         reminder={activeAlertReminder}
         onConfirmDose={confirmAlertDose}
+        onMissedDose={missAlertDose}
         onDismiss={dismissAlertModal}
       />
     </RemindersContext.Provider>
@@ -330,3 +425,4 @@ export function useReminders(): RemindersContextType {
   }
   return context;
 }
+

@@ -1,14 +1,15 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Reminder, ColumnStockStatus } from '../types/reminder';
-
+import { Reminder, ColumnStockStatus, DoseEvent } from '../types/reminder';
+import { calculateDoseOccurrence } from '../services/medicationLogic';
 import { triggerHardwareDispense } from '../services/hardware';
 
 interface Props {
   reminder: Reminder;
   onDelete: (id: string) => void;
   stockStatus?: ColumnStockStatus;
+  doseHistory?: DoseEvent[];
 }
 
 function formatTime(r: Reminder): string {
@@ -37,14 +38,44 @@ function formatDateLabel(dateStr?: string): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export default function ReminderCard({ reminder, onDelete, stockStatus }: Props) {
+export default function ReminderCard({ reminder, onDelete, stockStatus, doseHistory = [] }: Props) {
+  const occurrence = calculateDoseOccurrence(reminder, Date.now(), doseHistory);
+  const isMissed = occurrence.state === 'MISSED';
+  const isAlerting = occurrence.state === 'ALERTING';
+  const isTaken = occurrence.state === 'TAKEN' || occurrence.state === 'TAKEN_MANUAL';
+
   return (
-    <View style={styles.card}>
-      <View style={styles.iconWrap}>
-        <Ionicons name="time" size={28} color="#4CAF50" />
+    <View style={[styles.card, isMissed && styles.cardMissed]}>
+      <View style={[styles.iconWrap, isMissed && styles.iconWrapMissed, isAlerting && styles.iconWrapAlerting]}>
+        <Ionicons
+          name={isMissed ? 'alert-circle' : isAlerting ? 'alarm' : 'time'}
+          size={28}
+          color={isMissed ? '#DC2626' : isAlerting ? '#D97706' : '#4CAF50'}
+        />
       </View>
       <View style={styles.info}>
-        <Text style={styles.time}>{formatTime(reminder)}</Text>
+        <View style={styles.timeRow}>
+          <Text style={[styles.time, isMissed && styles.timeMissed]}>{formatTime(reminder)}</Text>
+          {isMissed && (
+            <View style={styles.missedTag}>
+              <Ionicons name="alert-circle" size={11} color="#DC2626" style={{ marginRight: 3 }} />
+              <Text style={styles.missedTagText}>MISSED (20m passed)</Text>
+            </View>
+          )}
+          {isAlerting && (
+            <View style={styles.alertingTag}>
+              <Ionicons name="alarm" size={11} color="#B45309" style={{ marginRight: 3 }} />
+              <Text style={styles.alertingTagText}>Time to Take ({Math.ceil(occurrence.remainingSeconds / 60)}m left)</Text>
+            </View>
+          )}
+          {isTaken && (
+            <View style={styles.takenTag}>
+              <Ionicons name="checkmark-circle" size={11} color="#15803D" style={{ marginRight: 3 }} />
+              <Text style={styles.takenTagText}>Taken Today</Text>
+            </View>
+          )}
+        </View>
+
         <View style={styles.badgeRow}>
           {reminder.compartment ? (
             <View style={styles.tag}>
@@ -146,6 +177,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 6,
     elevation: 3,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  cardMissed: {
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FFF8F8',
   },
   iconWrap: {
     width: 44,
@@ -156,14 +193,75 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
+  iconWrapMissed: {
+    backgroundColor: '#FEE2E2',
+  },
+  iconWrapAlerting: {
+    backgroundColor: '#FEF3C7',
+  },
   info: {
     flex: 1,
     marginRight: 6,
+  },
+  timeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
   },
   time: {
     fontSize: 20,
     fontWeight: '800',
     color: '#1A1A1A',
+  },
+  timeMissed: {
+    color: '#991B1B',
+  },
+  missedTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  missedTagText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#DC2626',
+    letterSpacing: 0.3,
+  },
+  alertingTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  alertingTagText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#B45309',
+  },
+  takenTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#DCFCE7',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  takenTagText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#15803D',
   },
   recurrence: {
     fontSize: 12,

@@ -29,6 +29,7 @@ import { triggerImmediateRestockNotification } from './notifications';
 const REMINDERS_STORAGE_KEY = '@medicine_reminders';
 const DOSE_HISTORY_STORAGE_KEY = '@medicine_dose_history';
 const COLUMN_REFILLS_STORAGE_KEY = '@medicine_column_refills';
+const MIGRATION_FLAG_KEY = '@sqlite_migrated_v2';
 
 /**
  * Load all stored reminders from SQLite (with AsyncStorage fallback/sync)
@@ -36,18 +37,21 @@ const COLUMN_REFILLS_STORAGE_KEY = '@medicine_column_refills';
 export async function loadReminders(): Promise<Reminder[]> {
   try {
     const sqliteData = await sqliteLoadReminders();
-    if (sqliteData && sqliteData.length > 0) {
+    const isMigrated = await AsyncStorage.getItem(MIGRATION_FLAG_KEY);
+    if (sqliteData && (sqliteData.length > 0 || isMigrated === 'true')) {
       return sqliteData;
     }
-    // If SQLite is empty, check AsyncStorage for migration
+    // Only on initial fresh upgrade check AsyncStorage for legacy migration
     const json = await AsyncStorage.getItem(REMINDERS_STORAGE_KEY);
     if (json) {
       const items = JSON.parse(json) as Reminder[];
       for (const item of items) {
         await sqliteSaveReminder(item).catch(() => {});
       }
+      await AsyncStorage.setItem(MIGRATION_FLAG_KEY, 'true').catch(() => {});
       return items;
     }
+    await AsyncStorage.setItem(MIGRATION_FLAG_KEY, 'true').catch(() => {});
     return [];
   } catch {
     try {
@@ -124,7 +128,7 @@ export async function addReminder(reminder: Reminder): Promise<Reminder[]> {
 }
 
 /**
- * Delete a reminder by ID
+ * Delete a reminder by ID (cleans both reminder and dose history in SQLite and mirrors)
  */
 export async function deleteReminder(id: string): Promise<Reminder[]> {
   try {
@@ -132,9 +136,21 @@ export async function deleteReminder(id: string): Promise<Reminder[]> {
   } catch (e) {
     console.warn('[storage] SQLite delete failed:', e);
   }
-  const existing = await loadReminders();
-  const updated = existing.filter((r) => r.id !== id);
+
+  // Also clean up dose_history in AsyncStorage for this schedule
+  try {
+    const historyJson = await AsyncStorage.getItem(DOSE_HISTORY_STORAGE_KEY);
+    if (historyJson) {
+      const history = JSON.parse(historyJson) as DoseEvent[];
+      const cleaned = history.filter((h) => h.scheduleId !== id);
+      await AsyncStorage.setItem(DOSE_HISTORY_STORAGE_KEY, JSON.stringify(cleaned));
+    }
+  } catch {}
+
+  // Single source of truth is SQLite
+  const updated = await sqliteLoadReminders();
   await AsyncStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(updated)).catch(() => {});
+  await AsyncStorage.setItem(MIGRATION_FLAG_KEY, 'true').catch(() => {});
   return updated;
 }
 
@@ -170,7 +186,8 @@ export async function getPendingSyncReminders(): Promise<Reminder[]> {
 export async function loadDoseHistory(): Promise<DoseEvent[]> {
   try {
     const sqliteHistory = await sqliteLoadDoseHistory();
-    if (sqliteHistory && sqliteHistory.length > 0) {
+    const isMigrated = await AsyncStorage.getItem(MIGRATION_FLAG_KEY);
+    if (sqliteHistory && (sqliteHistory.length > 0 || isMigrated === 'true')) {
       return sqliteHistory;
     }
     const json = await AsyncStorage.getItem(DOSE_HISTORY_STORAGE_KEY);
@@ -386,15 +403,19 @@ export async function seedPhasedOutMedicineData(): Promise<{
 }
 
 /**
- * Clear all SQLite & AsyncStorage data
+ * Clear all SQLite & AsyncStorage data cleanly
  */
 export async function clearAllMedicineData(): Promise<void> {
   try {
     await sqliteClearAll();
-  } catch {}
+  } catch (e) {
+    console.warn('[storage] SQLite clear failed:', e);
+  }
   await AsyncStorage.multiRemove([
     REMINDERS_STORAGE_KEY,
     DOSE_HISTORY_STORAGE_KEY,
     COLUMN_REFILLS_STORAGE_KEY,
   ]).catch(() => {});
+  // Mark migrated so stale data is never revived
+  await AsyncStorage.setItem(MIGRATION_FLAG_KEY, 'true').catch(() => {});
 }
