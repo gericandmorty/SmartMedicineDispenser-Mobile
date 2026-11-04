@@ -14,7 +14,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { AmPm, Reminder } from '../types/reminder';
-import { getCurrentTime12 } from '../services/medicationLogic';
+import { loadReminders } from '../services/storage';
+import { getCurrentTime12, resolveBulkSchedule, matchesSchedulePicker } from '../services/medicationLogic';
 
 const ITEM_HEIGHT = 46;
 const VISIBLE_COUNT = 3;
@@ -24,6 +25,8 @@ const CENTER_OFFSET = ITEM_HEIGHT; // 46px
 const HOURS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const MINUTES = Array.from({ length: 60 }, (_, i) => i);
 const PERIODS: AmPm[] = ['AM', 'PM'];
+const COLS_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+const ROWS_NUMS = ['1', '2', '3'];
 
 function toIsoString(d: Date): string {
   const y = d.getFullYear();
@@ -47,7 +50,7 @@ function WheelColumn<T>({
   onSelectIndex,
   width,
 }: WheelColumnProps<T>) {
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<any>(null);
   const isInteracting = useRef(false);
   const isMountedRef = useRef(false);
   const [visualIndex, setVisualIndex] = useState(selectedIndex);
@@ -168,6 +171,9 @@ export interface SetScheduleParams {
   compartment?: string;
   slotIndex?: number;
   reminderId?: string;
+  isBulk?: boolean;
+  bulkSlots?: number[];
+  bulkCompartments?: string[];
 }
 
 interface Props {
@@ -200,6 +206,8 @@ function SetScheduleContent({
   onClose: () => void;
   onSave: (reminder: Reminder) => Promise<void> | void;
 }) {
+  const [existingReminders, setExistingReminders] = useState<Reminder[]>([]);
+  useEffect(() => { loadReminders().then(setExistingReminders); }, []);
   const todayStr = useMemo(() => toIsoString(new Date()), []);
   const tomorrowStr = useMemo(() => {
     const d = new Date();
@@ -218,6 +226,71 @@ function SetScheduleContent({
   const [customDate, setCustomDate] = useState<string>(() => initialParams?.date || todayStr);
   const [showCalendar, setShowCalendar] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
+
+  const isInitialBulk = !!(
+    initialParams?.isBulk ||
+    (initialParams?.bulkCompartments && initialParams.bulkCompartments.length > 1) ||
+    (initialParams?.compartment && initialParams.compartment.includes(','))
+  );
+
+  const [scheduleType, setScheduleType] = useState<'single' | 'bulk'>(isInitialBulk ? 'bulk' : 'single');
+  const [bulkDrawer, setBulkDrawer] = useState<1 | 2>(() => {
+    if (initialParams?.compartment?.includes('Drawer 2') || (initialParams?.slotIndex ?? 0) >= 21) return 2;
+    return 1;
+  });
+
+  const getInitialBulkCompartments = (): string[] => {
+    if (initialParams?.bulkCompartments && initialParams.bulkCompartments.length > 0) {
+      return initialParams.bulkCompartments;
+    }
+    if (initialParams?.compartment) {
+      const matches = initialParams.compartment.match(/[A-Ga-g][1-3]/g);
+      if (matches && matches.length > 0) {
+        return matches.map((m) => m.toUpperCase());
+      }
+    }
+    return ['A1', 'A2', 'A3'];
+  };
+
+  const pickerDate = dateMode === 'today' ? todayStr : dateMode === 'tomorrow' ? tomorrowStr : dateMode === 'custom' ? customDate : undefined;
+  const selectionKey = `${bulkDrawer}:${hour}:${minute}:${amPm}:${pickerDate || 'daily'}`;
+  const [draftSelections, setDraftSelections] = useState<Record<string, string[]>>(() =>
+    initialParams?.reminderId ? { [selectionKey]: getInitialBulkCompartments() } : {});
+  const selectedBulkCompartments = draftSelections[selectionKey] ?? [];
+  const setSelectedBulkCompartments = (value: string[] | ((previous: string[]) => string[])) => {
+    setDraftSelections((previous) => ({ ...previous, [selectionKey]: typeof value === 'function' ? value(previous[selectionKey] ?? []) : value }));
+  };
+  const matchingReminders = existingReminders.filter((item) =>
+    item.id !== initialParams?.reminderId && matchesSchedulePicker(item, hour, minute, amPm, pickerDate));
+
+  const savedLabels = [...new Set(matchingReminders.flatMap((item) =>
+    (resolveBulkSchedule(item)?.slots ?? []).filter((slot) => Math.floor(slot / 21) + 1 === bulkDrawer)
+      .map((slot) => `${String.fromCharCode(65 + slot % 7)}${Math.floor((slot % 21) / 7) + 1}`)))].sort();
+
+  const toggleBulkCompartment = (comp: string) => {
+    setSelectedBulkCompartments((prev) => {
+      if (prev.includes(comp)) {
+        return prev.filter((c) => c !== comp);
+      } else {
+        return [...prev, comp].sort((a, b) => {
+          if (a[0] !== b[0]) return a.charCodeAt(0) - b.charCodeAt(0);
+          return Number(a[1]) - Number(b[1]);
+        });
+      }
+    });
+  };
+
+  const selectColumnPreset = (col: string) => {
+    const colComps = [`${col}1`, `${col}2`, `${col}3`].filter((label) => !savedLabels.includes(label));
+    setSelectedBulkCompartments((prev) => {
+      const next = new Set([...prev, ...colComps]);
+      return Array.from(next).sort();
+    });
+  };
+
+  const clearBulkSelection = () => {
+    setSelectedBulkCompartments([]);
+  };
 
   useEffect(() => {
     slideAnim.setValue(500);
@@ -255,7 +328,7 @@ function SetScheduleContent({
   }, [onClose]);
 
   const handleCommit = async () => {
-    if (saving) return;
+    if (saving || (scheduleType === 'bulk' && selectedBulkCompartments.length === 0)) return;
     setSaving(true);
 
     let finalDate: string | undefined = undefined;
@@ -276,19 +349,49 @@ function SetScheduleContent({
       recurrence = 'every-day';
     }
 
-    const reminder: Reminder = {
-      id: initialParams?.reminderId && initialParams.reminderId.trim() !== ''
-        ? initialParams.reminderId
-        : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      hour,
-      minute,
-      amPm,
-      recurrence,
-      date: finalDate,
-      createdAt: new Date().toISOString(),
-      compartment: initialParams?.compartment,
-      slotIndex: initialParams?.slotIndex,
-    };
+    let reminder: Reminder;
+
+    if (scheduleType === 'bulk') {
+      const drawerBase = bulkDrawer === 2 ? 21 : 0;
+      const sortedComps = [...selectedBulkCompartments].sort();
+      const slots = sortedComps.map((comp) => {
+        const colIdx = comp.charCodeAt(0) - 65;
+        const rowIdx = Number(comp[1]) - 1;
+        return drawerBase + rowIdx * 7 + colIdx;
+      });
+      const compLabel = `Drawer ${bulkDrawer} (${sortedComps.join(', ')})`;
+
+      reminder = {
+        id: initialParams?.reminderId && initialParams.reminderId.trim() !== ''
+          ? initialParams.reminderId
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        hour,
+        minute,
+        amPm,
+        recurrence,
+        date: finalDate,
+        createdAt: new Date().toISOString(),
+        compartment: compLabel,
+        slotIndex: slots[0] ?? 0,
+        isBulk: true,
+        bulkSlots: slots,
+        bulkCompartments: sortedComps,
+      };
+    } else {
+      reminder = {
+        id: initialParams?.reminderId && initialParams.reminderId.trim() !== ''
+          ? initialParams.reminderId
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        hour,
+        minute,
+        amPm,
+        recurrence,
+        date: finalDate,
+        createdAt: new Date().toISOString(),
+        compartment: initialParams?.compartment,
+        slotIndex: initialParams?.slotIndex,
+      };
+    }
 
     try {
       await onSave(reminder);
@@ -329,7 +432,9 @@ function SetScheduleContent({
           </View>
 
           <View style={styles.headerRow}>
-            <Text style={styles.sheetTitle}>Set Schedule</Text>
+            <Text style={styles.sheetTitle}>
+              {scheduleType === 'bulk' ? 'Set Bulk Schedule' : 'Set Schedule'}
+            </Text>
             <TouchableOpacity
               style={styles.closeBtn}
               onPress={handleDismiss}
@@ -340,8 +445,43 @@ function SetScheduleContent({
             </TouchableOpacity>
           </View>
 
-          {/* Compartment Pill (if selected from a dispenser slot) */}
-          {initialParams?.compartment ? (
+          {/* Mode Switcher: Single Slot vs Bulk Schedule */}
+          <View style={styles.modeToggleRow}>
+            <TouchableOpacity
+              style={[styles.modeTab, scheduleType === 'single' && styles.modeTabActive]}
+              onPress={() => setScheduleType('single')}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="cube-outline"
+                size={14}
+                color={scheduleType === 'single' ? '#166534' : '#6B7280'}
+                style={{ marginRight: 5 }}
+              />
+              <Text style={[styles.modeTabText, scheduleType === 'single' && styles.modeTabTextActive]}>
+                Single Slot
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.modeTab, scheduleType === 'bulk' && styles.modeTabActive]}
+              onPress={() => setScheduleType('bulk')}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="layers-outline"
+                size={14}
+                color={scheduleType === 'bulk' ? '#166534' : '#6B7280'}
+                style={{ marginRight: 5 }}
+              />
+              <Text style={[styles.modeTabText, scheduleType === 'bulk' && styles.modeTabTextActive]}>
+                Bulk Schedule
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Single Slot Pill */}
+          {scheduleType === 'single' && initialParams?.compartment ? (
             <View style={styles.compartmentPill}>
               <Ionicons name="cube-outline" size={13} color="#166534" style={{ marginRight: 5 }} />
               <Text style={styles.compartmentText}>
@@ -349,6 +489,91 @@ function SetScheduleContent({
               </Text>
             </View>
           ) : null}
+
+          {/* Bulk Selection Box */}
+          {scheduleType === 'bulk' && (
+            <View style={styles.bulkBox}>
+              <View style={styles.bulkHeaderRow}>
+                <Text style={styles.bulkBoxTitle}>SELECT COMPARTMENTS</Text>
+                <View style={styles.drawerToggleRow}>
+                  <TouchableOpacity
+                    style={[styles.drawerTab, bulkDrawer === 1 && styles.drawerTabActive]}
+                    onPress={() => setBulkDrawer(1)}
+                  >
+                    <Text style={[styles.drawerTabText, bulkDrawer === 1 && styles.drawerTabTextActive]}>
+                      Drawer 1
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.drawerTab, bulkDrawer === 2 && styles.drawerTabActive]}
+                    onPress={() => setBulkDrawer(2)}
+                  >
+                    <Text style={[styles.drawerTabText, bulkDrawer === 2 && styles.drawerTabTextActive]}>
+                      Drawer 2
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* 7x3 Grid */}
+              <View style={styles.bulkGrid}>
+                {ROWS_NUMS.map((r) => (
+                  <View key={r} style={styles.bulkGridRow}>
+                    {COLS_LETTERS.map((c) => {
+                      const compId = `${c}${r}`;
+                      const isDraftSelected = selectedBulkCompartments.includes(compId);
+                      const slot = (bulkDrawer - 1) * 21 + (Number(r) - 1) * 7 + c.charCodeAt(0) - 65;
+                      const existing = matchingReminders.filter((item) =>
+                        item.id !== initialParams?.reminderId && resolveBulkSchedule(item)?.slots.includes(slot));
+                      const isSelected = isDraftSelected || existing.length > 0;
+                      return (
+                        <TouchableOpacity
+                          key={compId}
+                          disabled={existing.length > 0}
+                          style={[styles.bulkGridCell, isSelected && styles.bulkGridCellSelected]}
+                          onPress={() => toggleBulkCompartment(compId)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={[styles.bulkGridCellText, isSelected && styles.bulkGridCellTextSelected]}>
+                            {compId}{existing.length ? " •" : ""}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ))}
+              </View>
+
+              {/* Quick Presets & Reset */}
+              <View style={styles.bulkPresetRow}>
+                <TouchableOpacity style={styles.presetPill} onPress={() => selectColumnPreset('A')}>
+                  <Text style={styles.presetPillText}>+ Col A</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.presetPill} onPress={() => selectColumnPreset('B')}>
+                  <Text style={styles.presetPillText}>+ Col B</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.presetPill} onPress={() => selectColumnPreset('C')}>
+                  <Text style={styles.presetPillText}>+ Col C</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.presetPillClear} onPress={clearBulkSelection}>
+                  <Text style={styles.presetPillClearText}>Reset</Text>
+                </TouchableOpacity>
+              </View>
+
+              {matchingReminders.filter((item) => resolveBulkSchedule(item)?.slots.some((slot) => Math.floor(slot / 21) + 1 === bulkDrawer)).map((item) => (
+                <Text key={item.id} style={styles.bulkSummaryText}>
+                  {item.compartment}: {item.hour}:{String(item.minute).padStart(2, '0')} {item.amPm} · {item.date || 'Every day'}
+                </Text>
+              ))}
+              <View style={styles.bulkSummaryPill}>
+                <Ionicons name="layers" size={13} color="#166534" style={{ marginRight: 5 }} />
+                <Text style={styles.bulkSummaryText} numberOfLines={3}>
+                  {savedLabels.length > 0 ? `Saved: ${savedLabels.join(', ')}. ` : ''}
+                  {selectedBulkCompartments.length > 0 ? `Selected: ${selectedBulkCompartments.join(', ')}` : 'Select compartments to add.'}
+                </Text>
+              </View>
+            </View>
+          )}
 
           {/* Section: TIME */}
           <Text style={styles.sectionHeader}>TIME</Text>
@@ -503,7 +728,8 @@ function SetScheduleContent({
 
           {/* Primary Action Button: SAVE SCHEDULE */}
           <TouchableOpacity
-            style={styles.saveBtn}
+            style={[styles.saveBtn, (saving || (scheduleType === 'bulk' && selectedBulkCompartments.length === 0)) && { opacity: 0.5 }]}
+            disabled={saving || (scheduleType === 'bulk' && selectedBulkCompartments.length === 0)}
             onPress={handleCommit}
             activeOpacity={0.85}
           >
@@ -609,6 +835,155 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#166534',
+  },
+  modeToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    padding: 3,
+    marginBottom: 12,
+  },
+  modeTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 7,
+    borderRadius: 9,
+  },
+  modeTabActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  modeTabText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  modeTabTextActive: {
+    color: '#166534',
+    fontWeight: '700',
+  },
+  bulkBox: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginBottom: 12,
+  },
+  bulkHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  bulkBoxTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#374151',
+    letterSpacing: 0.8,
+  },
+  drawerToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#E5E7EB',
+    borderRadius: 8,
+    padding: 2,
+  },
+  drawerTab: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  drawerTabActive: {
+    backgroundColor: '#2E9E4B',
+  },
+  drawerTabText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4B5563',
+  },
+  drawerTabTextActive: {
+    color: '#FFFFFF',
+  },
+  bulkGrid: {
+    gap: 4,
+    marginBottom: 8,
+  },
+  bulkGridRow: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  bulkGridCell: {
+    flex: 1,
+    height: 32,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bulkGridCellSelected: {
+    backgroundColor: '#2E9E4B',
+    borderColor: '#166534',
+  },
+  bulkGridCellText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#374151',
+  },
+  bulkGridCellTextSelected: {
+    color: '#FFFFFF',
+  },
+  bulkPresetRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 8,
+  },
+  presetPill: {
+    backgroundColor: '#E5E7EB',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  presetPillText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#374151',
+  },
+  presetPillClear: {
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginLeft: 'auto',
+  },
+  presetPillClearText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+  bulkSummaryPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EAF7EE',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#BDE8C7',
+  },
+  bulkSummaryText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
+    flex: 1,
+    flexWrap: 'wrap',
   },
   sectionHeader: {
     fontSize: 11,

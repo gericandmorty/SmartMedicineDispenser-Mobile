@@ -45,7 +45,7 @@ function WheelCol<T>({
   width,
   textAlign = 'center',
 }: WheelColProps<T>) {
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<any>(null);
   const isInteracting = useRef(false);
   const [visualIndex, setVisualIndex] = useState(selectedIndex);
 

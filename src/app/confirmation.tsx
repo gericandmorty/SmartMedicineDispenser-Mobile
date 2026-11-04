@@ -38,6 +38,7 @@ export default function ConfirmationScreen() {
     compartment?: string;
     slotIndex?: string;
     reminderId?: string;
+    isBulk?: string;
   }>();
   const hour = parseInt(params.hour ?? '8', 10);
   const minute = parseInt(params.minute ?? '0', 10);
@@ -88,6 +89,7 @@ export default function ConfirmationScreen() {
       slotIndex: params.slotIndex !== undefined && params.slotIndex !== ''
         ? parseInt(params.slotIndex, 10)
         : undefined,
+      isBulk: params.isBulk === 'true' || (params.compartment !== undefined && params.compartment.includes(',')),
     };
     await add(reminder);
   }, [hour, minute, second, amPm, hasDate, params.date, params.reminderId, params.compartment, params.slotIndex, add]);

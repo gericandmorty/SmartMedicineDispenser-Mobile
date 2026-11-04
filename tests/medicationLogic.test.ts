@@ -1,6 +1,11 @@
 import test, { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  resolveBulkSchedule,
+  matchesSchedulePicker,
+  hardwareEventMatchesOccurrence,
+  hardwareConfirmsActiveOccurrence,
+  shouldPresentDoseAlert,
   to24Hour,
   formatTime12,
   getCurrentTime12,
@@ -337,6 +342,122 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
       const check = validateScheduleConflict(edited, [existing]);
       assert.strictEqual(check.hasConflict, false);
     });
+
+    it('TC-4.5: flags conflict if a single schedule tries to use a slot already part of a bulk schedule', () => {
+      const existingBulk: Reminder = {
+        id: 'bulk_1',
+        hour: 8,
+        minute: 0,
+        amPm: 'AM',
+        recurrence: 'every-day',
+        compartment: 'Drawer 1 (A1, A2, A3)',
+        slotIndex: 0,
+        isBulk: true,
+        bulkSlots: [0, 1, 2],
+        bulkCompartments: ['A1', 'A2', 'A3'],
+        createdAt: new Date().toISOString(),
+      };
+
+      const singleAttempt: Reminder = {
+        id: 'sch_single_attempt',
+        hour: 12,
+        minute: 0,
+        amPm: 'PM',
+        recurrence: 'every-day',
+        compartment: 'Drawer 1 (A2)',
+        slotIndex: 1, // clashes with A2 in bulk
+        createdAt: new Date().toISOString(),
+      };
+
+      const check = validateScheduleConflict(singleAttempt, [existingBulk]);
+      assert.strictEqual(check.hasConflict, true);
+      assert.match(check.reason!, /already exists/);
+    });
+
+    it('TC-4.6: flags conflict if a bulk schedule includes an already scheduled slot', () => {
+      const existingSingle: Reminder = {
+        id: 'sch_single_1',
+        hour: 9,
+        minute: 0,
+        amPm: 'AM',
+        recurrence: 'every-day',
+        compartment: 'Drawer 1 (A3)',
+        slotIndex: 2,
+        createdAt: new Date().toISOString(),
+      };
+
+      const bulkAttempt: Reminder = {
+        id: 'bulk_attempt_2',
+        hour: 8,
+        minute: 0,
+        amPm: 'AM',
+        recurrence: 'every-day',
+        compartment: 'Drawer 1 (A1, A2, A3)',
+        slotIndex: 0,
+        isBulk: true,
+        bulkSlots: [0, 1, 2], // slot 2 overlaps with existingSingle
+        bulkCompartments: ['A1', 'A2', 'A3'],
+        createdAt: new Date().toISOString(),
+      };
+
+      const check = validateScheduleConflict(bulkAttempt, [existingSingle]);
+      assert.strictEqual(check.hasConflict, true);
+    });
+
+    it('TC-4.7: permits bulk schedule when all requested compartments are free', () => {
+      const existingOther: Reminder = {
+        id: 'sch_other',
+        hour: 9,
+        minute: 0,
+        amPm: 'AM',
+        recurrence: 'every-day',
+        compartment: 'Drawer 1 (B1)',
+        slotIndex: 7,
+        createdAt: new Date().toISOString(),
+      };
+
+      const bulkSchedule: Reminder = {
+        id: 'bulk_ok',
+        hour: 8,
+        minute: 0,
+        amPm: 'AM',
+        recurrence: 'every-day',
+        compartment: 'Drawer 1 (A1, A2, A3)',
+        slotIndex: 0,
+        isBulk: true,
+        bulkSlots: [0, 1, 2],
+        bulkCompartments: ['A1', 'A2', 'A3'],
+        createdAt: new Date().toISOString(),
+      };
+
+      const check = validateScheduleConflict(bulkSchedule, [existingOther]);
+      assert.strictEqual(check.hasConflict, false);
+    });
+
+    it('TC-4.8: allows updating an existing bulk schedule with same ID', () => {
+      const existingBulk: Reminder = {
+        id: 'bulk_edit',
+        hour: 8,
+        minute: 0,
+        amPm: 'AM',
+        recurrence: 'every-day',
+        compartment: 'Drawer 1 (A1, A2, A3)',
+        slotIndex: 0,
+        isBulk: true,
+        bulkSlots: [0, 1, 2],
+        bulkCompartments: ['A1', 'A2', 'A3'],
+        createdAt: new Date().toISOString(),
+      };
+
+      const editedBulk: Reminder = {
+        ...existingBulk,
+        hour: 10,
+        minute: 30,
+      };
+
+      const check = validateScheduleConflict(editedBulk, [existingBulk]);
+      assert.strictEqual(check.hasConflict, false);
+    });
   });
 
   // ── Test Suite 5: End-to-End State Machine Lifecycle ─────────────────────
@@ -647,3 +768,110 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
   });
 });
 
+
+
+describe('Bulk schedule transport', () => {
+  it('recovers every slot from legacy drawer 2 labels', () => {
+    const result = resolveBulkSchedule({ compartment: 'Drawer 2 (A1, A2, A3)' });
+    assert.deepEqual(result?.slots, [21, 28, 35]);
+    assert.equal(result?.drawer, 2);
+  });
+  it('keeps all 21 slots and derives consistent labels from stored indices', () => {
+    const slots = Array.from({ length: 21 }, (_, i) => i + 21);
+    const result = resolveBulkSchedule({ bulkSlots: [...slots, 21], compartment: 'Drawer 1 (A1)' });
+    assert.deepEqual(result?.slots, slots);
+    assert.equal(result?.drawer, 2);
+    assert.ok(result?.compartment.endsWith('G3)'));
+    assert.equal(result?.compartment.match(/[A-G][1-3]/g)?.length, 21);
+  });
+  it('rejects empty and invalid selections instead of scheduling A1', () => {
+    assert.equal(resolveBulkSchedule({}), null);
+    assert.equal(resolveBulkSchedule({ bulkSlots: [0, 42] }), null);
+    assert.equal(resolveBulkSchedule({ bulkCompartments: ['Z9'] }), null);
+  });
+});
+
+
+describe('Foreground reconciliation and bulk picker', () => {
+  const reminder: Reminder = { id: 'bulk', hour: 12, minute: 45, amPm: 'AM', recurrence: 'once', date: '2026-11-04', createdAt: '', compartment: 'Drawer 1 (A1, A2, A3)', bulkSlots: [0,7,14] };
+  const trigger = new Date(2026, 10, 4, 0, 45).getTime();
+  const event: DoseEvent = { eventId: 'pickup', scheduleId: 'bulk', triggerDate: '2026-11-04', scheduledTimeFormatted: '', targetTriggerEpoch: trigger / 1000, resolution: 'TAKEN', elapsedSeconds: 30 };
+  it('matches only the picker time and date, including AM/PM', () => {
+    assert.equal(matchesSchedulePicker(reminder, 12,45,'AM','2026-11-04'), true);
+    assert.equal(matchesSchedulePicker(reminder, 12,46,'AM','2026-11-04'), false);
+    assert.equal(matchesSchedulePicker(reminder, 12,45,'PM','2026-11-04'), false);
+    assert.equal(matchesSchedulePicker(reminder, 12,45,'AM','2026-11-05'), false);
+  });
+  it('recognizes pickup while the app was away and rejects old occurrences', () => {
+    assert.equal(hardwareEventMatchesOccurrence(reminder, event, trigger + 60000), true);
+    assert.equal(hardwareEventMatchesOccurrence(reminder, {...event, triggerDate: '2026-11-03'}, trigger + 60000), false);
+    assert.equal(hardwareEventMatchesOccurrence(reminder, {...event, targetTriggerEpoch: trigger/1000-60}, trigger + 60000), false);
+  });
+  it('matches grouped hardware events by complete drawer slots, never another drawer', () => {
+    const grouped = {...event, scheduleId: 'other', compartment: 'Drawer 1 (A1, A2, A3); Drawer 2 (B1, B2, B3)'};
+    assert.equal(hardwareEventMatchesOccurrence(reminder, grouped, trigger+60000), true);
+    assert.equal(hardwareEventMatchesOccurrence(reminder, {...grouped, compartment: 'Drawer 2 (A1, A2, A3)'}, trigger+60000), false);
+    assert.equal(hardwareEventMatchesOccurrence(reminder, {...grouped, compartment: 'Drawer 1 (A1)'}, trigger+60000), false);
+  });
+});
+
+
+describe('Modal requires a confirmed hardware occurrence', () => {
+  const reminder: Reminder = { id: 'due', hour: 12, minute: 45, amPm: 'AM', recurrence: 'once', date: '2026-11-04', createdAt: '', compartment: 'Drawer 1 (A1)', slotIndex: 0 };
+  const now = new Date(2026, 10, 4, 0, 46).getTime();
+  const status = { status: 'online' as const, device_time: '2026-11-04 00:46:00', active_alert: { is_alerting: true, schedule_id: 'due', compartment: 'Drawer 1 (A1)', slot_index: 0, relay_num: 1, elapsed_seconds: 60, remaining_seconds: 1140 } };
+  it('does not present on failed, idle, or incomplete status responses', () => {
+    assert.equal(hardwareConfirmsActiveOccurrence(reminder, null, now), false);
+    assert.equal(hardwareConfirmsActiveOccurrence(reminder, {...status, active_alert: {...status.active_alert, is_alerting: false}}, now), false);
+    assert.equal(hardwareConfirmsActiveOccurrence(reminder, {...status, device_time: undefined}, now), false);
+  });
+  it('presents a confirmed waiting dose but rejects another time or drawer', () => {
+    assert.equal(hardwareConfirmsActiveOccurrence(reminder, status, now), true);
+    assert.equal(hardwareConfirmsActiveOccurrence(reminder, {...status, active_alert: {...status.active_alert, elapsed_seconds: 0}}, now), false);
+    assert.equal(hardwareConfirmsActiveOccurrence(reminder, {...status, active_alert: {...status.active_alert, schedule_id: 'other', compartment: 'Drawer 2 (A1)'}}, now), false);
+  });
+});
+
+
+describe('Live alarm versus reopening the app', () => {
+  const reminder: Reminder = { id: 'normal', hour: 12, minute: 45, amPm: 'AM', recurrence: 'once', date: '2026-11-04', createdAt: '', compartment: 'Drawer 1 (A1)', slotIndex: 0 };
+  const due = new Date(2026, 10, 4, 0, 45).getTime();
+  it('shows a normal scheduled modal without hardware when the app was already open', () => {
+    assert.equal(shouldPresentDoseAlert(reminder, [], due-60000, null, due-1), false);
+    assert.equal(shouldPresentDoseAlert(reminder, [], due-60000, null, due), true);
+    assert.equal(shouldPresentDoseAlert(reminder, [], due-60000, null, due+5000), true);
+  });
+  it('does not replay an unverified alarm that became due while the app was away', () => {
+    assert.equal(shouldPresentDoseAlert(reminder, [], due+30000, null, due+31000), false);
+    const status = { status: 'online' as const, device_time: '2026-11-04 00:45:31', active_alert: { is_alerting: true, schedule_id: 'normal', compartment: 'Drawer 1 (A1)', slot_index: 0, relay_num: 1, elapsed_seconds: 31, remaining_seconds: 1169 } };
+    assert.equal(shouldPresentDoseAlert(reminder, [], due+30000, status, due+31000), true);
+  });
+  it('never shows a dose already recorded as taken or past its grace period', () => {
+    const event: DoseEvent = { eventId: 'taken', scheduleId: 'normal', triggerDate: '2026-11-04', scheduledTimeFormatted: '', targetTriggerEpoch: due/1000, resolution: 'TAKEN' };
+    assert.equal(shouldPresentDoseAlert(reminder, [event], due-60000, null, due+30000), false);
+    assert.equal(shouldPresentDoseAlert(reminder, [], due-60000, null, due+1200001), false);
+  });
+});
+
+
+describe('Saving a minute-only schedule for now', () => {
+  const due = new Date(2026, 10, 4, 1, 25).getTime();
+  const reminder: Reminder = { id: 'now-125', hour: 1, minute: 25, amPm: 'AM', recurrence: 'once', date: '2026-11-04', createdAt: new Date(due + 10000).toISOString(), compartment: 'Drawer 1 (A1)', slotIndex: 0 };
+  it('alerts at 1:25:11 after opening at 1:25:05 and saving at 1:25:10', () => {
+    assert.equal(shouldPresentDoseAlert(reminder, [], due+5000, null, due+11000), true);
+  });
+  it('keeps the newly saved occurrence eligible throughout its grace period', () => {
+    assert.equal(shouldPresentDoseAlert(reminder, [], due+5000, null, due+70000), true);
+  });
+  it('still reconciles instead of replaying when reopened after saving', () => {
+    assert.equal(shouldPresentDoseAlert(reminder, [], due+20000, null, due+21000), false);
+  });
+  it('does not turn a schedule created for an earlier minute into a live alarm', () => {
+    const old = {...reminder, minute: 24};
+    assert.equal(shouldPresentDoseAlert(old, [], due+5000, null, due+11000), false);
+  });
+  it('does not reopen a newly saved occurrence already marked taken', () => {
+    const event: DoseEvent = { eventId: 'taken-now', scheduleId: reminder.id, triggerDate: reminder.date!, targetTriggerEpoch: due/1000, scheduledTimeFormatted: '01:25 AM', resolution: 'TAKEN' };
+    assert.equal(shouldPresentDoseAlert(reminder, [event], due+5000, null, due+11000), false);
+  });
+});

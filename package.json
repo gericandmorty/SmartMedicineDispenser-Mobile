@@ -47,5 +47,6 @@
     "lint": "expo lint",
     "test": "node --experimental-strip-types --test tests/medicationLogic.test.ts"
   },
-  "private": true
+  "private": true,
+  "packageManager": "bun@1.4.4"
 }
