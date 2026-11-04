@@ -76,14 +76,13 @@ export default function MedicationAlertModal({
         setIsMissed(true);
         setRemainingSec(0);
         setSolenoidOpen(false);
-        setSolenoidLock(drawerNum, false).catch(() => {});
         onMissedDose?.(reminder);
       } else {
         setIsMissed(false);
         setRemainingSec(initialRemaining);
-        // Auto-unlock solenoid when medication alert fires within grace period
+        // Display alert state; opening this modal must not actuate the drawer.
         setSolenoidOpen(true);
-        setSolenoidLock(drawerNum, true).catch(() => {});
+
       }
 
       // Haptic/vibration feedback

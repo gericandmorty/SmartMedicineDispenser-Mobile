@@ -15,6 +15,7 @@ export default function SetTimeScreen() {
     compartment?: string;
     slotIndex?: string;
     reminderId?: string;
+    isBulk?: string;
   }>();
 
   // Capture current time snapshot ONCE upon screen mount so re-renders don't roll the clock
@@ -29,6 +30,7 @@ export default function SetTimeScreen() {
     compartment: params.compartment,
     slotIndex: params.slotIndex ? parseInt(params.slotIndex, 10) : undefined,
     reminderId: params.reminderId,
+    isBulk: params.isBulk === 'true',
   }), [
     params.hour,
     params.minute,
@@ -38,6 +40,7 @@ export default function SetTimeScreen() {
     params.compartment,
     params.slotIndex,
     params.reminderId,
+    params.isBulk,
     initialTimeSnapshot,
   ]);
 

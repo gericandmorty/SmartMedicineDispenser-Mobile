@@ -21,9 +21,12 @@ export interface Reminder {
   date?: string;     // YYYY-MM-DD
   notificationId?: string;
   createdAt: string; // ISO string
-  compartment?: string; // e.g. "Drawer 1 (A1)"
+  compartment?: string; // e.g. "Drawer 1 (A1)" or "Drawer 1 (A1, A2, A3)"
   slotIndex?: number;   // 0-41
   syncStatus?: ScheduleConfigState; // default ACTIVE or SYNC_PENDING
+  isBulk?: boolean;
+  bulkSlots?: number[]; // e.g. [0, 1, 2]
+  bulkCompartments?: string[]; // e.g. ["A1", "A2", "A3"]
 }
 
 export interface DoseEvent {
@@ -54,6 +57,7 @@ export interface HardwareStatus {
   device?: string;
   ip?: string;
   time?: string;
+  device_time?: string;
   schedules_count?: number;
   is_vibrating?: boolean;
   active_alert?: HardwareAlertState;

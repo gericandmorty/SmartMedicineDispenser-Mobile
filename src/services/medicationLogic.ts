@@ -1,5 +1,6 @@
 import type {
   Reminder,
+  HardwareStatus,
   DoseEvent,
   DoseOccurrenceState,
   ColumnStockStatus,
@@ -171,12 +172,25 @@ export function validateScheduleConflict(
   existingReminders: Reminder[]
 ): { hasConflict: boolean; reason?: string } {
   const newDate = newReminder.date || '';
+  const newSlots = newReminder.bulkSlots && newReminder.bulkSlots.length > 0
+    ? newReminder.bulkSlots
+    : (newReminder.slotIndex !== undefined ? [newReminder.slotIndex] : []);
 
   for (const existing of existingReminders) {
     // Ignore self when editing
     if (existing.id === newReminder.id) continue;
 
     const existingDate = existing.date || '';
+    const datesOverlap = !newDate || !existingDate || newDate === existingDate;
+    if (!datesOverlap) continue;
+
+    const existingSlots = existing.bulkSlots && existing.bulkSlots.length > 0
+      ? existing.bulkSlots
+      : (existing.slotIndex !== undefined ? [existing.slotIndex] : []);
+
+    // Check slot intersection
+    const slotCollision = newSlots.length > 0 && existingSlots.length > 0 &&
+      newSlots.some((s) => existingSlots.includes(s));
 
     // Check compartment collision
     const sameCompartment =
@@ -184,24 +198,12 @@ export function validateScheduleConflict(
       existing.compartment &&
       newReminder.compartment.trim().toLowerCase() === existing.compartment.trim().toLowerCase();
 
-    // Check slot index collision
-    const sameSlot =
-      newReminder.slotIndex !== undefined &&
-      existing.slotIndex !== undefined &&
-      newReminder.slotIndex === existing.slotIndex;
-
-    if (sameCompartment || sameSlot) {
-      // Conflict if both are daily OR both target the exact same date
-      const datesOverlap =
-        !newDate || !existingDate || newDate === existingDate;
-
-      if (datesOverlap) {
-        const slotDesc = newReminder.compartment || `Slot ${(newReminder.slotIndex ?? 0) + 1}`;
-        return {
-          hasConflict: true,
-          reason: `A schedule already exists for ${slotDesc}. Each compartment holds one dose per schedule period.`,
-        };
-      }
+    if (slotCollision || sameCompartment) {
+      const slotDesc = newReminder.compartment || `Slot ${(newReminder.slotIndex ?? 0) + 1}`;
+      return {
+        hasConflict: true,
+        reason: `A schedule already exists for ${slotDesc}. Each compartment holds one dose per schedule period.`,
+      };
     }
   }
 
@@ -346,3 +348,80 @@ export function generateRestockNotificationMessage(status: ColumnStockStatus): {
   };
 }
 
+
+/** Resolve legacy label-only bulk reminders and keep both controllers on the same slots. */
+export function resolveBulkSchedule(reminder: Pick<Reminder, 'compartment' | 'slotIndex' | 'bulkSlots' | 'bulkCompartments'>) {
+  const drawer = /drawer\s*2/i.test(reminder.compartment ?? '') || (reminder.slotIndex ?? 0) >= 21 ? 2 : 1;
+  const labels = reminder.bulkCompartments?.length
+    ? reminder.bulkCompartments
+    : reminder.compartment?.match(/[A-G][1-3]/gi) ?? [];
+  const candidates = reminder.bulkSlots?.length ? reminder.bulkSlots : labels.length
+    ? labels.map((label) => {
+      const normalized = label.toUpperCase();
+      return /^[A-G][1-3]$/.test(normalized)
+        ? (drawer - 1) * 21 + (Number(normalized[1]) - 1) * 7 + normalized.charCodeAt(0) - 65
+        : -1;
+    })
+    : reminder.slotIndex === undefined ? [] : [reminder.slotIndex];
+  if (!candidates.length || candidates.some((slot) => !Number.isInteger(slot) || slot < 0 || slot >= 42)) {
+    return null;
+  }
+  const slots = [...new Set(candidates)].sort((a, b) => a - b);
+  const slotLabel = (slot: number) => `${String.fromCharCode(65 + slot % 7)}${Math.floor((slot % 21) / 7) + 1}`;
+  const compartment = [1, 2].flatMap((d) => {
+    const group = slots.filter((slot) => Math.floor(slot / 21) + 1 === d);
+    return group.length ? [`Drawer ${d} (${group.map(slotLabel).join(', ')})`] : [];
+  }).join('; ');
+  return { slots, compartment, drawer: Math.floor(slots[0] / 21) + 1 };
+}
+
+export function matchesSchedulePicker(reminder: Reminder, hour: number, minute: number, amPm: AmPm, date?: string): boolean {
+  return to24Hour(reminder.hour, reminder.amPm) === to24Hour(hour, amPm) &&
+    reminder.minute === minute && (!reminder.date || reminder.date === date);
+}
+
+export function hardwareEventMatchesOccurrence(reminder: Reminder, event: DoseEvent, now = Date.now()): boolean {
+  const occurrence = calculateDoseOccurrence(reminder, now);
+  if (event.triggerDate !== occurrence.triggerDate) return false;
+  const timestamp = event.targetTriggerEpoch > 0 ? event.targetTriggerEpoch * 1000
+    : Date.parse(event.scheduledTimeFormatted.replace(' ', 'T'));
+  if (!Number.isFinite(timestamp) || Math.floor(timestamp / 60000) !== Math.floor(occurrence.targetTriggerEpochMs / 60000)) return false;
+  if (event.scheduleId === reminder.id) return true;
+  const target = resolveBulkSchedule(reminder);
+  const eventSlots = [...(event.compartment ?? '').matchAll(/Drawer\s*([12])\s*\(([^)]+)\)/gi)].flatMap((group) =>
+    resolveBulkSchedule({ compartment: `Drawer ${group[1]} (${group[2]})` })?.slots ?? []);
+  return !!target && target.slots.every((slot) => eventSlots.includes(slot));
+}
+
+/** A missing pickup event is not proof that a dose is still waiting. */
+export function hardwareConfirmsActiveOccurrence(reminder: Reminder, status: HardwareStatus | null, now = Date.now()): boolean {
+  const alert = status?.active_alert;
+  if (status?.status !== 'online' || !alert?.is_alerting || !status.device_time ||
+      !Number.isFinite(alert.elapsed_seconds) || alert.elapsed_seconds < 0) return false;
+  const controllerNow = Date.parse(status.device_time.replace(' ', 'T'));
+  const triggerMs = controllerNow - alert.elapsed_seconds * 1000;
+  if (!Number.isFinite(triggerMs)) return false;
+  const triggerDate = formatDateLocal(new Date(triggerMs));
+  return hardwareEventMatchesOccurrence(reminder, {
+    eventId: 'active-status', scheduleId: alert.schedule_id, compartment: alert.compartment,
+    triggerDate, targetTriggerEpoch: triggerMs / 1000, scheduledTimeFormatted: '', resolution: 'TAKEN',
+  }, now);
+}
+
+/** Live alarms use the phone clock; alarms due while away require controller confirmation. */
+export function shouldPresentDoseAlert(
+  reminder: Reminder,
+  history: DoseEvent[],
+  foregroundStartedAt: number,
+  status: HardwareStatus | null,
+  now = Date.now(),
+): boolean {
+  const occurrence = calculateDoseOccurrence(reminder, now, history);
+  const savedAt = Date.parse(reminder.createdAt ?? '');
+  // Minute-only schedules point at :00. A schedule saved at 01:25:10 for
+  // 01:25 must still alert, even if this foreground session started at :05.
+  const savedForCurrentMinute = Number.isFinite(savedAt) && savedAt >= foregroundStartedAt && savedAt <= now &&
+    Math.floor(savedAt / 60000) === Math.floor(occurrence.targetTriggerEpochMs / 60000);
+  return occurrence.state === 'ALERTING' &&
+    (savedForCurrentMinute || occurrence.targetTriggerEpochMs >= foregroundStartedAt || hardwareConfirmsActiveOccurrence(reminder, status, now));
+}

@@ -151,14 +151,17 @@ const CLOSED_H = 0;
 const OPEN_H = ROW_COUNT * CELL_H + DIVIDER * (ROW_COUNT + 1) + 48;
 
 export interface CompartmentScheduleParams {
-  compartment: string;
-  slotIndex: number;
+  compartment?: string;
+  slotIndex?: number;
   hour?: number;
   minute?: number;
   second?: number;
   amPm?: AmPm;
   date?: string;
   reminderId?: string;
+  isBulk?: boolean;
+  bulkSlots?: number[];
+  bulkCompartments?: string[];
 }
 
 interface DrawerProps {
@@ -190,15 +193,25 @@ function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSe
 
   // Find active count for this drawer
   const drawerActiveCount = useMemo(() => {
-    return allReminders.filter((r) => {
-      if (r.compartment) {
-        return r.compartment.startsWith(`Drawer ${index + 1}`);
-      }
-      if (r.slotIndex !== undefined) {
-        return r.slotIndex >= drawerBaseIndex && r.slotIndex < drawerBaseIndex + SLOTS;
-      }
-      return false;
-    }).length;
+    let count = 0;
+    for (let slot = 0; slot < SLOTS; slot++) {
+      const globalSlotIndex = drawerBaseIndex + slot;
+      const col = COLS[slot % COL_COUNT];
+      const row = ROWS[Math.floor(slot / COL_COUNT)];
+      const hasMatch = allReminders.some((r) => {
+        if (r.bulkSlots?.includes(globalSlotIndex)) return true;
+        if (r.bulkCompartments?.includes(`${col}${row}`)) {
+          return !r.compartment || r.compartment.includes(`Drawer ${index + 1}`);
+        }
+        if (r.compartment) {
+          if (r.compartment === `Drawer ${index + 1} (${col}${row})`) return true;
+          if (r.compartment.includes(`Drawer ${index + 1}`) && r.compartment.includes(`${col}${row}`)) return true;
+        }
+        return r.slotIndex === globalSlotIndex;
+      });
+      if (hasMatch) count++;
+    }
+    return count;
   }, [allReminders, index, drawerBaseIndex]);
 
   const handleCellPress = (col: string, row: string, ri: number, ci: number) => {
@@ -206,9 +219,16 @@ function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSe
     const globalSlotIndex = drawerBaseIndex + slotInDrawer;
     const compartmentLabel = `Drawer ${index + 1} (${col}${row})`;
 
-    // Check if slot has reminder (match compartment label first)
+    // Check if slot has reminder (supports single and bulk schedules)
     const existing = allReminders.find((r) => {
-      if (r.compartment) return r.compartment === compartmentLabel;
+      if (r.bulkSlots?.includes(globalSlotIndex)) return true;
+      if (r.bulkCompartments?.includes(`${col}${row}`)) {
+        return !r.compartment || r.compartment.includes(`Drawer ${index + 1}`);
+      }
+      if (r.compartment) {
+        if (r.compartment === compartmentLabel) return true;
+        if (r.compartment.includes(`Drawer ${index + 1}`) && r.compartment.includes(`${col}${row}`)) return true;
+      }
       if (r.slotIndex !== undefined) return r.slotIndex === globalSlotIndex;
       return false;
     });
@@ -267,7 +287,14 @@ function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSe
               const compartmentLabel = `Drawer ${index + 1} (${col}${row})`;
 
               const reminder = allReminders.find((r) => {
-                if (r.compartment) return r.compartment === compartmentLabel;
+                if (r.bulkSlots?.includes(globalSlotIndex)) return true;
+                if (r.bulkCompartments?.includes(`${col}${row}`)) {
+                  return !r.compartment || r.compartment.includes(`Drawer ${index + 1}`);
+                }
+                if (r.compartment) {
+                  if (r.compartment === compartmentLabel) return true;
+                  if (r.compartment.includes(`Drawer ${index + 1}`) && r.compartment.includes(`${col}${row}`)) return true;
+                }
                 if (r.slotIndex !== undefined) return r.slotIndex === globalSlotIndex;
                 return false;
               });

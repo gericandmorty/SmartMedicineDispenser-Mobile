@@ -77,7 +77,14 @@ export default function ReminderCard({ reminder, onDelete, stockStatus, doseHist
         </View>
 
         <View style={styles.badgeRow}>
-          {reminder.compartment ? (
+          {reminder.isBulk || (reminder.bulkCompartments && reminder.bulkCompartments.length > 0) ? (
+            <View style={styles.bulkTag}>
+              <Ionicons name="layers-outline" size={12} color="#166534" style={{ marginRight: 3 }} />
+              <Text style={styles.bulkTagText}>
+                {reminder.compartment || `Bulk (${reminder.bulkCompartments?.join(', ')})`}
+              </Text>
+            </View>
+          ) : reminder.compartment ? (
             <View style={styles.tag}>
               <Ionicons name="cube-outline" size={12} color="#1B5E20" style={{ marginRight: 3 }} />
               <Text style={styles.tagText}>{reminder.compartment}</Text>
@@ -281,6 +288,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
     borderRadius: 6,
+  },
+  bulkTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EAF7EE',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  bulkTagText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#166534',
   },
   tagText: {
     fontSize: 10,

@@ -57,6 +57,18 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       // Column already exists
     }
 
+    try {
+      await db.execAsync(`ALTER TABLE reminders ADD COLUMN isBulk INTEGER;`);
+    } catch {}
+
+    try {
+      await db.execAsync(`ALTER TABLE reminders ADD COLUMN bulkSlots TEXT;`);
+    } catch {}
+
+    try {
+      await db.execAsync(`ALTER TABLE reminders ADD COLUMN bulkCompartments TEXT;`);
+    } catch {}
+
     dbInstance = db;
     return db;
   })();
@@ -70,19 +82,34 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 export async function sqliteLoadReminders(): Promise<Reminder[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<any>('SELECT * FROM reminders ORDER BY hour ASC, minute ASC');
-  return rows.map((r) => ({
-    id: r.id,
-    hour: r.hour,
-    minute: r.minute,
-    second: r.second !== null && r.second !== undefined ? Number(r.second) : undefined,
-    amPm: r.amPm,
-    recurrence: r.recurrence || undefined,
-    date: r.date || undefined,
-    compartment: r.compartment || undefined,
-    slotIndex: r.slotIndex !== null ? r.slotIndex : undefined,
-    syncStatus: r.syncStatus || 'SYNC_PENDING',
-    createdAt: r.createdAt || undefined,
-  }));
+  return rows.map((r) => {
+    let bulkSlots: number[] | undefined = undefined;
+    let bulkCompartments: string[] | undefined = undefined;
+    if (r.bulkSlots) {
+      try { bulkSlots = JSON.parse(r.bulkSlots); } catch {}
+    }
+    if (r.bulkCompartments) {
+      try { bulkCompartments = JSON.parse(r.bulkCompartments); } catch {}
+    }
+    const isBulk = r.isBulk === 1 || (bulkSlots && bulkSlots.length > 1) || (r.compartment && r.compartment.includes(','));
+
+    return {
+      id: r.id,
+      hour: r.hour,
+      minute: r.minute,
+      second: r.second !== null && r.second !== undefined ? Number(r.second) : undefined,
+      amPm: r.amPm,
+      recurrence: r.recurrence || undefined,
+      date: r.date || undefined,
+      compartment: r.compartment || undefined,
+      slotIndex: r.slotIndex !== null ? r.slotIndex : undefined,
+      syncStatus: r.syncStatus || 'SYNC_PENDING',
+      createdAt: r.createdAt || undefined,
+      isBulk: isBulk ? true : undefined,
+      bulkSlots,
+      bulkCompartments,
+    };
+  });
 }
 
 /**
@@ -90,23 +117,51 @@ export async function sqliteLoadReminders(): Promise<Reminder[]> {
  */
 export async function sqliteSaveReminder(reminder: Reminder): Promise<void> {
   const db = await getDatabase();
-  await db.runAsync(
-    `INSERT OR REPLACE INTO reminders (id, hour, minute, second, amPm, recurrence, date, compartment, slotIndex, syncStatus, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      reminder.id,
-      reminder.hour,
-      reminder.minute,
-      reminder.second !== undefined ? reminder.second : null,
-      reminder.amPm,
-      reminder.recurrence || null,
-      reminder.date || null,
-      reminder.compartment || null,
-      reminder.slotIndex !== undefined ? reminder.slotIndex : null,
-      reminder.syncStatus || 'SYNC_PENDING',
-      reminder.createdAt || new Date().toISOString(),
-    ]
-  );
+  const isBulkVal = reminder.isBulk ? 1 : (reminder.bulkSlots && reminder.bulkSlots.length > 1 ? 1 : 0);
+  const bulkSlotsVal = reminder.bulkSlots ? JSON.stringify(reminder.bulkSlots) : null;
+  const bulkCompVal = reminder.bulkCompartments ? JSON.stringify(reminder.bulkCompartments) : null;
+
+  try {
+    await db.runAsync(
+      `INSERT OR REPLACE INTO reminders (id, hour, minute, second, amPm, recurrence, date, compartment, slotIndex, syncStatus, createdAt, isBulk, bulkSlots, bulkCompartments)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        reminder.id,
+        reminder.hour,
+        reminder.minute,
+        reminder.second !== undefined ? reminder.second : null,
+        reminder.amPm,
+        reminder.recurrence || null,
+        reminder.date || null,
+        reminder.compartment || null,
+        reminder.slotIndex !== undefined ? reminder.slotIndex : null,
+        reminder.syncStatus || 'SYNC_PENDING',
+        reminder.createdAt || new Date().toISOString(),
+        isBulkVal,
+        bulkSlotsVal,
+        bulkCompVal,
+      ]
+    );
+  } catch {
+    // Fallback if extra columns failed to create
+    await db.runAsync(
+      `INSERT OR REPLACE INTO reminders (id, hour, minute, second, amPm, recurrence, date, compartment, slotIndex, syncStatus, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        reminder.id,
+        reminder.hour,
+        reminder.minute,
+        reminder.second !== undefined ? reminder.second : null,
+        reminder.amPm,
+        reminder.recurrence || null,
+        reminder.date || null,
+        reminder.compartment || null,
+        reminder.slotIndex !== undefined ? reminder.slotIndex : null,
+        reminder.syncStatus || 'SYNC_PENDING',
+        reminder.createdAt || new Date().toISOString(),
+      ]
+    );
+  }
 }
 
 /**

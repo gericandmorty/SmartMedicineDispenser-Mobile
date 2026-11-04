@@ -14,16 +14,10 @@ import { Ionicons } from '@expo/vector-icons';
 import {
   setSolenoidLock,
   pulseUnlockSolenoid,
-  autoDiscoverHardware,
-  getArduinoIP,
-  getESP32IP,
-  pingArduino,
-  pingESP32,
 } from '../../services/hardware';
 import {
   seedPhasedOutMedicineData,
   recordColumnRefill,
-  clearAllMedicineData,
 } from '../../services/storage';
 import { useReminders } from '../../hooks/useReminders';
 
@@ -32,44 +26,6 @@ export default function SettingsScreen() {
 
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
-
-  // Hardware IP & Auto-Discovery states
-  const [arduinoIP, setArduinoIP] = useState<string>('');
-  const [esp32IP, setESP32IP] = useState<string>('');
-  const [discovering, setDiscovering] = useState<boolean>(false);
-
-  React.useEffect(() => {
-    Promise.all([getArduinoIP(), getESP32IP()]).then(([ard, esp]) => {
-      setArduinoIP(ard);
-      setESP32IP(esp);
-    });
-  }, []);
-
-  const handleAutoDiscover = async () => {
-    setDiscovering(true);
-    try {
-      const res = await autoDiscoverHardware();
-      const ard = await getArduinoIP();
-      const esp = await getESP32IP();
-      setArduinoIP(ard);
-      setESP32IP(esp);
-      if (res.found) {
-        Alert.alert(
-          '✅ Dispenser Auto-Discovered!',
-          `Successfully connected to hardware on local Wi-Fi:\n\n• Arduino Uno R4: ${ard}\n• ESP32 Master: ${esp}`
-        );
-      } else {
-        Alert.alert(
-          '🔍 Auto-Discovery Completed',
-          `Current endpoints:\n• Arduino Uno R4: ${ard}\n• ESP32 Master: ${esp}\n\nEnsure dispenser hardware is powered on and connected to the same Wi-Fi SSID.`
-        );
-      }
-    } catch (err: any) {
-      Alert.alert('Scan Status', err?.message || 'Auto-discovery finished.');
-    } finally {
-      setDiscovering(false);
-    }
-  };
 
   // Solenoid control states
   const [solenoidOpen, setSolenoidOpen] = useState(false);
@@ -296,55 +252,6 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* ── Wi-Fi Auto-Discovery ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Wi-Fi Auto-Discovery & Status</Text>
-          <View style={styles.card}>
-            <Text style={styles.settingLabel}>Zero-Config Hardware Discovery</Text>
-            <Text style={styles.settingDesc}>
-              Auto-locks onto the Arduino Uno R4 WiFi and ESP32 Master on your network via UDP beacons.
-            </Text>
-
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12, marginBottom: 12 }}>
-              <View style={[styles.endpointBadge, { flex: 1 }]}>
-                <Ionicons name="hardware-chip-outline" size={16} color="#166534" />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.endpointTitle}>Arduino Uno R4</Text>
-                  <Text style={styles.endpointIP} numberOfLines={1}>
-                    {arduinoIP || 'Scanning...'}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={[styles.endpointBadge, { flex: 1 }]}>
-                <Ionicons name="wifi-outline" size={16} color="#1E40AF" />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.endpointTitle}>ESP32 Master</Text>
-                  <Text style={styles.endpointIP} numberOfLines={1}>
-                    {esp32IP || 'Scanning...'}
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            <TouchableOpacity
-              style={[styles.actionBtn, { backgroundColor: '#EAF7EE', borderColor: '#2E9E4B' }]}
-              onPress={handleAutoDiscover}
-              disabled={discovering}
-              activeOpacity={0.8}
-            >
-              {discovering ? (
-                <ActivityIndicator size="small" color="#2E9E4B" style={{ marginRight: 8 }} />
-              ) : (
-                <Ionicons name="search" size={17} color="#2E9E4B" style={{ marginRight: 8 }} />
-              )}
-              <Text style={[styles.actionBtnText, { color: '#166534' }]}>
-                {discovering ? 'Auto-Detecting Devices...' : '🔍 Auto-Discover Dispenser on Network'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
         {/* ── Notifications ── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Notifications</Text>
@@ -430,19 +337,27 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* ── About ── */}
+        {/* ── System Guide ── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>About</Text>
-          <View style={styles.settingRow}>
-            <View style={styles.settingLeft}>
-              <View style={styles.iconBox}>
-                <Ionicons name="medical-outline" size={20} color="#4CAF50" />
+          <Text style={styles.sectionTitle}>How to Use the System</Text>
+          <View style={styles.card}>
+            <Text style={styles.settingLabel}>Smart Medicine Dispenser Guide</Text>
+            <Text style={styles.settingDesc}>
+              Follow these steps to prepare the dispenser, schedule reminders, and record medicine pickup.
+            </Text>
+            {[
+              ['1. Prepare the dispenser', 'Power on the dispenser and connect your phone to the same Wi-Fi network. Load the medicine into the intended compartments in Drawer 1 or Drawer 2, then close the drawers. Allow notifications in your phone settings.'],
+              ['2. Set a schedule', 'On My Schedule, select a drawer and compartment. Choose the time, check AM or PM, and select a specific date or a daily schedule. Save and check that the schedule has synced before leaving the app.'],
+              ['3. Schedule several compartments', 'Choose Bulk Schedule, select the drawer and compartments, then set their shared time and date. Save a separate bulk schedule for the other drawer. Saved highlights follow the date and time selected in the picker.'],
+              ['4. Collect the medicine', 'When the alarm sounds, open the indicated drawer and collect the medicine from the lit compartments. Close the drawer afterward so the dispenser can record pickup. The alert window lasts 20 minutes.'],
+              ['5. Check pickup history', 'Reopen the app while connected to the dispenser to sync pickup records. Review the schedule and dose history for taken or missed doses. The dispenser runs synced schedules even when the app is closed.'],
+              ['6. Refill and use manual controls', 'Refill the appropriate compartments when stock is low. In Settings, select Drawer 1, Drawer 2, or Both Drawers before using the lock switch or the 5-second quick unlock.'],
+            ].map(([title, description]) => (
+              <View key={title} style={styles.guideStep}>
+                <Text style={styles.settingLabel}>{title}</Text>
+                <Text style={styles.guideDescription}>{description}</Text>
               </View>
-              <View>
-                <Text style={styles.settingLabel}>Medicine Reminder</Text>
-                <Text style={styles.settingDesc}>Version 1.0.0 (Smart Dispenser)</Text>
-              </View>
-            </View>
+            ))}
           </View>
         </View>
       </ScrollView>
@@ -684,26 +599,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1B5E20',
   },
-  endpointBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F9FAFB',
-    borderRadius: 10,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    gap: 8,
+  guideStep: {
+    marginTop: 18,
   },
-  endpointTitle: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#6B7280',
-    textTransform: 'uppercase',
-  },
-  endpointIP: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#111827',
-    marginTop: 2,
+  guideDescription: {
+    fontSize: 14,
+    color: '#616161',
+    lineHeight: 21,
+    marginTop: 6,
   },
 });
