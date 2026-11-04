@@ -161,6 +161,31 @@ export default function CompartmentDetailModal({
             </View>
           </View>
 
+          {/* Bulk Schedule Indicator */}
+          {(reminder.isBulk || (reminder.bulkCompartments && reminder.bulkCompartments.length > 0) || (reminder.compartment && reminder.compartment.includes(','))) && (
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: '#EAF7EE',
+              borderRadius: 10,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              borderWidth: 1,
+              borderColor: '#BDE8C7',
+              marginBottom: 12,
+            }}>
+              <Ionicons name="layers-outline" size={16} color="#166534" style={{ marginRight: 6 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#166534' }}>
+                  Part of Bulk Schedule
+                </Text>
+                <Text style={{ fontSize: 11, color: '#2E7D32', marginTop: 1 }}>
+                  {reminder.compartment || reminder.bulkCompartments?.join(', ')}
+                </Text>
+              </View>
+            </View>
+          )}
+
           {/* Dose Status Notice Banner */}
           {isDoseMissed && (
             <View style={styles.missedNoticeBox}>

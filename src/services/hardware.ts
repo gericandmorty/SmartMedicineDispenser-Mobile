@@ -1,3 +1,4 @@
+import { resolveBulkSchedule, hardwareEventMatchesOccurrence } from './medicationLogic';
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
@@ -375,75 +376,9 @@ export interface HardwareDoseCheckResult {
 export async function checkHardwareDoseResolved(
   reminder: Reminder
 ): Promise<HardwareDoseCheckResult> {
-  const esp32IP = await getESP32IP();
-  const arduinoIP = await getArduinoIP();
-
-  const extractLabel = (str?: string) => {
-    if (!str) return '';
-    const m = str.match(/\(([^)]+)\)/);
-    return m ? m[1].trim().toUpperCase() : str.trim().toUpperCase();
-  };
-
-  const targetLabel = extractLabel(reminder.compartment);
-
-  // 1. Check ESP32 event history buffer (Primary authoritative source for TAKEN events)
-  try {
-    const events = await fetchHardwareEvents(esp32IP, 5);
-    if (events && events.length > 0) {
-      for (const ev of events) {
-        if (ev.resolution === 'TAKEN') {
-          const idMatch = ev.scheduleId && ev.scheduleId === reminder.id;
-          const evLabel = extractLabel(ev.compartment);
-          const compMatch =
-            targetLabel &&
-            (evLabel === targetLabel ||
-              ev.compartment?.toUpperCase().includes(targetLabel) ||
-              (reminder.compartment && reminder.compartment.toUpperCase().includes(evLabel)));
-
-          if (idMatch || compMatch) {
-            return {
-              resolved: true,
-              resolution: 'TAKEN',
-              elapsedSeconds: ev.elapsedSeconds ?? 0,
-            };
-          }
-        }
-      }
-    }
-  } catch {}
-
-  // 2. Check ESP32 active_alert status
-  try {
-    const espStatus = await fetchHardwareStatus(esp32IP);
-    if (espStatus && espStatus.status === 'online') {
-      if (espStatus.active_alert && espStatus.active_alert.is_alerting === false && espStatus.is_vibrating === false) {
-        // Query Arduino status to confirm no alert is active
-        const ardStatus = await fetchHardwareStatus(arduinoIP);
-        if (ardStatus && (ardStatus as any).is_alerting === false && (ardStatus as any).active_alerts === 0) {
-          return {
-            resolved: true,
-            resolution: 'TAKEN',
-          };
-        }
-      }
-    }
-  } catch {}
-
-  // 3. Check Arduino status for direct reed switch drawer closure confirmation
-  try {
-    const ardStatus = await fetchHardwareStatus(arduinoIP);
-    if (ardStatus && (ardStatus as any).status === 'online') {
-      const raw = ardStatus as any;
-      if (raw.last_dose_taken === true && (raw.last_taken_ms_ago === undefined || raw.last_taken_ms_ago < 90000)) {
-        return {
-          resolved: true,
-          resolution: 'TAKEN',
-        };
-      }
-    }
-  } catch {}
-
-  return { resolved: false };
+  const events = await fetchHardwareEvents(await getESP32IP(), 20);
+  const event = events.find((item) => item.resolution === 'TAKEN' && hardwareEventMatchesOccurrence(reminder, item));
+  return event ? { resolved: true, resolution: 'TAKEN', elapsedSeconds: event.elapsedSeconds } : { resolved: false };
 }
 
 /**
@@ -536,6 +471,10 @@ export async function triggerHardwareDispense(reminder: Reminder): Promise<void>
  * Sync schedule to both Arduino and ESP32 Mini over Wi-Fi with client epoch calibration
  */
 export async function syncScheduleToESP32(reminder: Reminder): Promise<boolean> {
+  if (reminder.isBulk || reminder.compartment?.includes(',') || (reminder.bulkSlots && reminder.bulkSlots.length > 1) || (reminder.bulkCompartments && reminder.bulkCompartments.length > 1)) {
+    return syncBulkScheduleToESP32(reminder);
+  }
+
   const arduinoIP = await getArduinoIP();
   const esp32IP = await getESP32IP();
 
@@ -562,6 +501,45 @@ export async function syncScheduleToESP32(reminder: Reminder): Promise<boolean> 
 
   const [ardOk, espOk] = await Promise.all([sendTo(arduinoIP), sendTo(esp32IP)]);
   return ardOk || espOk;
+}
+
+/**
+ * Sync bulk schedule to both Arduino and ESP32 Mini over Wi-Fi with client epoch calibration
+ */
+export async function syncBulkScheduleToESP32(reminder: Reminder): Promise<boolean> {
+  const bulk = resolveBulkSchedule(reminder);
+  if (!bulk) return false;
+  const arduinoIP = await getArduinoIP();
+  const esp32IP = await getESP32IP();
+
+  const clientEpoch = Math.floor(Date.now() / 1000);
+  const resolvedDrawer = bulk.drawer;
+  const compString = bulk.compartment;
+  const slotsString = bulk.slots.join(',');
+
+  const params = new URLSearchParams({
+    id: reminder.id,
+    hour: String(reminder.hour),
+    minute: String(reminder.minute),
+    second: String(reminder.second ?? 0),
+    amPm: reminder.amPm,
+    recurrence: reminder.recurrence,
+    date: reminder.date || '',
+    compartments: compString,
+    compartment: compString,
+    slots: slotsString,
+    drawer: String(resolvedDrawer),
+    slotIndex: String(bulk.slots[0]),
+    client_epoch: String(clientEpoch),
+  });
+
+  const sendTo = async (ip: string) => {
+    if (!ip) return false;
+    return nativeHttpGet(`http://${ip}/set-bulk-schedule?${params.toString()}`, 3500);
+  };
+
+  const [ardOk, espOk] = await Promise.all([sendTo(arduinoIP), sendTo(esp32IP)]);
+  return ardOk && espOk;
 }
 
 /**

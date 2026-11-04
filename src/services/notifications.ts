@@ -1,3 +1,6 @@
+import { getAllScheduledNotificationsAsync } from 'expo-notifications/build/getAllScheduledNotificationsAsync';
+import { cancelAllScheduledNotificationsAsync } from 'expo-notifications/build/cancelAllScheduledNotificationsAsync';
+import { dismissAllNotificationsAsync } from 'expo-notifications/build/dismissAllNotificationsAsync';
 import { Platform } from 'react-native';
 import { Reminder } from '../types/reminder';
 
@@ -113,7 +116,9 @@ export async function scheduleReminderNotification(reminder: Reminder): Promise<
       };
     }
 
+    await cancelScheduledNotificationAsync(reminder.id);
     const id = await scheduleNotificationAsync({
+      identifier: reminder.id,
       content: {
         title: '💊 Medicine Reminder',
         body: bodyText,
@@ -222,4 +227,21 @@ export async function triggerImmediateMissedNotification(
     console.warn('[notifications] Failed to trigger immediate missed notification:', e);
     return undefined;
   }
+}
+
+export async function clearMedicineNotifications(): Promise<void> {
+  await cancelAllScheduledNotificationsAsync();
+  await dismissAllNotificationsAsync();
+}
+
+export async function reconcileMedicineNotifications(reminders: Reminder[]): Promise<void> {
+  const scheduled = await getAllScheduledNotificationsAsync();
+  const ids = new Set(reminders.map((r) => r.id));
+  for (const notification of scheduled) {
+    if (!ids.has(notification.identifier)) await cancelScheduledNotificationAsync(notification.identifier);
+  }
+  for (const reminder of reminders) {
+    if (!scheduled.some((n) => n.identifier === reminder.id)) await scheduleReminderNotification(reminder);
+  }
+  if (!reminders.length) await dismissAllNotificationsAsync();
 }

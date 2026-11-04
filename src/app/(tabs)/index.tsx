@@ -117,7 +117,11 @@ export default function HomeScreen() {
     const timeFormatted = reminder.second !== undefined && reminder.second > 0
       ? `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')}:${String(reminder.second).padStart(2, '0')} ${reminder.amPm}`
       : `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')} ${reminder.amPm}`;
-    showToast(`Schedule set for ${timeFormatted}`);
+    if (reminder.isBulk) {
+      showToast(`Bulk schedule set for ${timeFormatted}`);
+    } else {
+      showToast(`Schedule set for ${timeFormatted}`);
+    }
   };
 
   const handleRefillColumn = useCallback(
@@ -272,14 +276,24 @@ export default function HomeScreen() {
         )}
       </ScrollView>
 
-      {/* Bottom Action Footer */}
+      {/* Bottom Action Footer with Single & Bulk Schedule options */}
       <View style={styles.footer}>
-        <PrimaryButton
-          label="+ ADD ANOTHER TIME"
-          onPress={() => handleOpenSheet(undefined)}
-          color="#2E9E4B"
-          style={styles.addBtn}
-        />
+        <View style={styles.footerBtnRow}>
+          <TouchableOpacity
+            style={styles.bulkBtn}
+            onPress={() => handleOpenSheet({ isBulk: true })}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="layers-outline" size={17} color="#2E9E4B" style={{ marginRight: 6 }} />
+            <Text style={styles.bulkBtnText}>+ BULK SCHEDULE</Text>
+          </TouchableOpacity>
+          <PrimaryButton
+            label="+ ADD TIME"
+            onPress={() => handleOpenSheet(undefined)}
+            color="#2E9E4B"
+            style={styles.addBtn}
+          />
+        </View>
       </View>
 
       {/* Half-Screen Modal Bottom Sheet */}
@@ -481,10 +495,36 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   footer: {
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
     paddingBottom: 16,
     paddingTop: 12,
     backgroundColor: '#F5F0E8',
   },
-  addBtn: { width: '100%', borderRadius: 16 },
+  footerBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+    width: '100%',
+  },
+  bulkBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#EAF7EE',
+    borderWidth: 1.5,
+    borderColor: '#2E9E4B',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bulkBtnText: {
+    color: '#166534',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  addBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 14,
+  },
 });

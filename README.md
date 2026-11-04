@@ -138,7 +138,7 @@ The mobile application communicates with the hardware modules using HTTP GET and
 
 ### Prerequisites
 * Node.js (version 20 or higher recommended)
-* npm (version 10 or higher)
+* Bun 1.4.4 (used locally and by EAS Build)
 * Android Studio (for Android Emulator) or Expo Go on a physical device connected to the same Wi-Fi network as the hardware.
 
 ### Installation
@@ -150,14 +150,14 @@ The mobile application communicates with the hardware modules using HTTP GET and
 
 2. Install dependencies:
    ```bash
-   npm install
+   bun install --frozen-lockfile
    ```
 
 ### Running the Development Server
 
 1. Start the Expo development server:
    ```bash
-   npm start
+   bun run start
    ```
 
 2. Open the application:
@@ -170,7 +170,7 @@ The mobile application communicates with the hardware modules using HTTP GET and
 Run the verification test suite covering time conversions, 20-minute countdowns, midnight rollovers, and weekly stock calculations:
 
 ```bash
-npm test
+bun run test
 ```
 
 To run the full 7-day pill depletion simulation:
@@ -186,3 +186,15 @@ node --experimental-strip-types tests/simulatePhasedOut.ts
 * Freelance Project Development
 * Collaboration with Bryan Batan (GitHub: https://github.com/brybry20)
 * Microcontroller Firmware Repository: https://github.com/gericandmorty/SmartMedicineDispenser-MicroController
+
+
+### Android APK builds
+
+Keep `bun.lock` committed and included in the build upload. This project uses Bun;
+do not generate `package-lock.json` or other package manager lockfiles alongside it.
+
+From the mobile project directory:
+
+```bash
+bunx eas-cli@latest build --platform android --profile preview --clear-cache
+```
