@@ -26,7 +26,7 @@ const toastFade = new Animated.Value(0);
 const toastTranslate = new Animated.Value(-30);
 
 export default function HomeScreen() {
-  const { reminders, doseHistory, loading, refresh, add, remove, seedPhasedOut } = useReminders();
+  const { reminders, doseHistory, loading, refresh, add, remove } = useReminders();
   const [sheetVisible, setSheetVisible] = useState(false);
   const [sheetParams, setSheetParams] = useState<SetScheduleParams | undefined>(undefined);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -134,7 +134,7 @@ export default function HomeScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* Toast Notification Banner */}
       {toastMessage && (
         <Animated.View
@@ -248,17 +248,6 @@ export default function HomeScreen() {
             <Text style={styles.emptySubtext}>
               Tap a drawer above to preview compartments,{'\n'}then add a time below.
             </Text>
-            <TouchableOpacity
-              style={styles.demoSeedBtn}
-              onPress={async () => {
-                await seedPhasedOut();
-                showToast('Inserted 0/7 doses demo into SQLite!');
-              }}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="flask-outline" size={15} color="#166534" style={{ marginRight: 6 }} />
-              <Text style={styles.demoSeedText}>Insert 0/7 Doses Demo (SQLite)</Text>
-            </TouchableOpacity>
           </View>
         ) : (
           reminders.map((r) => {
@@ -400,23 +389,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 18,
   },
-  demoSeedBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#DCFCE7',
-    borderWidth: 1,
-    borderColor: '#86EFAC',
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    marginTop: 18,
-  },
-  demoSeedText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#166534',
-  },
   solenoidQuickCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -507,7 +479,10 @@ const styles = StyleSheet.create({
   },
   bulkBtn: {
     flex: 1,
-    height: 48,
+    minHeight: 48,
+    minWidth: 0,
+    paddingVertical: 8,
+    paddingHorizontal: 7,
     borderRadius: 14,
     backgroundColor: '#EAF7EE',
     borderWidth: 1.5,
@@ -517,6 +492,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   bulkBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
     color: '#166534',
     fontSize: 13,
     fontWeight: '800',
@@ -524,7 +501,8 @@ const styles = StyleSheet.create({
   },
   addBtn: {
     flex: 1,
-    height: 48,
+    minHeight: 48,
+    height: undefined,
     borderRadius: 14,
   },
 });

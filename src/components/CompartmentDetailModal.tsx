@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
+  ScrollView,
   StyleSheet,
   TouchableOpacity,
   Modal,
@@ -9,6 +10,7 @@ import {
   Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Reminder, ColumnStockStatus, DoseEvent } from '../types/reminder';
 import { calculateDoseOccurrence } from '../services/medicationLogic';
 
@@ -73,6 +75,8 @@ export default function CompartmentDetailModal({
     }
   }, [visible, animFade, animScale, animTranslateY]);
 
+  const insets = useSafeAreaInsets();
+
   if (!visible || !reminder) return null;
 
   const timeFormatted = reminder.second !== undefined && reminder.second > 0
@@ -102,9 +106,10 @@ export default function CompartmentDetailModal({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <View style={styles.scrim}>
+      <View style={[styles.scrim, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 12 }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
 
+        <ScrollView style={{ width: '100%', maxWidth: 380 }} contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }} showsVerticalScrollIndicator={false}>
         <Animated.View
           style={[
             styles.card,
@@ -118,7 +123,7 @@ export default function CompartmentDetailModal({
           <View style={styles.header}>
             <View style={styles.headerLeft}>
               <View style={styles.slotBadge}>
-                <View style={[styles.ledDot, isDoseMissed && { backgroundColor: '#DC2626' }]} />
+                <View style={[styles.ledDot, isDoseTaken && { backgroundColor: '#F97316' }, isDoseMissed && { backgroundColor: '#DC2626' }]} />
                 <Text style={styles.slotBadgeText}>
                   Drawer {drawerIndex + 1} • {col}{row}
                 </Text>
@@ -323,6 +328,7 @@ export default function CompartmentDetailModal({
             </TouchableOpacity>
           </View>
         </Animated.View>
+        </ScrollView>
       </View>
     </Modal>
   );
@@ -596,6 +602,8 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   refillBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
     fontSize: 11,
     fontWeight: '700',
     color: '#15803D',
@@ -624,6 +632,8 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   dispenseBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800',
@@ -646,6 +656,8 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   editBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
     fontSize: 13,
     fontWeight: '700',
     color: '#166534',
@@ -662,6 +674,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   deleteBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
     fontSize: 13,
     fontWeight: '700',
     color: '#DC2626',

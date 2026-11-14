@@ -8,11 +8,11 @@ import {
   Animated,
   Modal,
   Pressable,
-  Platform,
   NativeSyntheticEvent,
   NativeScrollEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AmPm, Reminder } from '../types/reminder';
 import { loadReminders } from '../services/storage';
 import { getCurrentTime12, resolveBulkSchedule, matchesSchedulePicker } from '../services/medicationLogic';
@@ -412,6 +412,8 @@ function SetScheduleContent({
     return `${dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ▾`;
   }, [customDate]);
 
+  const insets = useSafeAreaInsets();
+
   return (
     <View style={styles.modalOverlay}>
         {/* Scrim Backdrop */}
@@ -423,6 +425,7 @@ function SetScheduleContent({
         <Animated.View
           style={[
             styles.sheetContainer,
+            { paddingBottom: Math.max(insets.bottom, 16) + 8 },
             { transform: [{ translateY: slideAnim }] },
           ]}
         >
@@ -445,6 +448,7 @@ function SetScheduleContent({
             </TouchableOpacity>
           </View>
 
+          <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: 8 }} nestedScrollEnabled showsVerticalScrollIndicator={false}>
           {/* Mode Switcher: Single Slot vs Bulk Schedule */}
           <View style={styles.modeToggleRow}>
             <TouchableOpacity
@@ -736,6 +740,7 @@ function SetScheduleContent({
             <Ionicons name="checkmark-circle-outline" size={20} color="#FFFFFF" style={{ marginRight: 6 }} />
             <Text style={styles.saveBtnText}>SAVE SCHEDULE</Text>
           </TouchableOpacity>
+          </ScrollView>
         </Animated.View>
       </View>
   );
@@ -781,7 +786,8 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
-    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    maxHeight: '92%',
+    paddingBottom: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.14,
@@ -860,6 +866,8 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   modeTabText: {
+    flexShrink: 1,
+    textAlign: 'center',
     fontSize: 13,
     fontWeight: '600',
     color: '#6B7280',
@@ -1149,6 +1157,8 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   saveBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '700',

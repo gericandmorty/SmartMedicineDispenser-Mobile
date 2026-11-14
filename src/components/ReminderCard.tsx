@@ -50,7 +50,7 @@ export default function ReminderCard({ reminder, onDelete, stockStatus, doseHist
         <Ionicons
           name={isMissed ? 'alert-circle' : isAlerting ? 'alarm' : 'time'}
           size={28}
-          color={isMissed ? '#DC2626' : isAlerting ? '#D97706' : '#4CAF50'}
+          color={isTaken ? '#F97316' : isMissed ? '#DC2626' : isAlerting ? '#D97706' : '#4CAF50'}
         />
       </View>
       <View style={styles.info}>
@@ -70,7 +70,7 @@ export default function ReminderCard({ reminder, onDelete, stockStatus, doseHist
           )}
           {isTaken && (
             <View style={styles.takenTag}>
-              <Ionicons name="checkmark-circle" size={11} color="#15803D" style={{ marginRight: 3 }} />
+              <Ionicons name="checkmark-circle" size={11} color="#C2410C" style={{ marginRight: 3 }} />
               <Text style={styles.takenTagText}>Taken Today</Text>
             </View>
           )}
@@ -258,7 +258,7 @@ const styles = StyleSheet.create({
   takenTag: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#DCFCE7',
+    backgroundColor: '#FFEDD5',
     borderWidth: 1,
     borderColor: '#86EFAC',
     borderRadius: 6,
@@ -268,7 +268,7 @@ const styles = StyleSheet.create({
   takenTagText: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#15803D',
+    color: '#C2410C',
   },
   recurrence: {
     fontSize: 12,

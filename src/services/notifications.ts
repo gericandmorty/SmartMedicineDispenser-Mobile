@@ -245,3 +245,20 @@ export async function reconcileMedicineNotifications(reminders: Reminder[]): Pro
   }
   if (!reminders.length) await dismissAllNotificationsAsync();
 }
+
+/** Live drawer alerts require fresh sensor readings while the app is active. */
+export async function triggerDrawerNotification(drawer: number, overdue: boolean): Promise<void> {
+  if (Platform.OS === 'web') return;
+  await ensureNotificationChannel();
+  const permission = await getPermissionsAsync();
+  if (permission.status !== 'granted') return; // The in-app warning works without permission.
+  await scheduleNotificationAsync({
+    identifier: `drawer-${drawer}-open`,
+    content: {
+      title: overdue ? `Drawer ${drawer} left open` : `Drawer ${drawer} is open`,
+      body: overdue ? 'The drawer has been open for at least one minute. Please close it.' : 'Please close the drawer after collecting your medicine.',
+      sound: true,
+    },
+    trigger: Platform.OS === 'android' ? { channelId: DEFAULT_CHANNEL_ID } : null,
+  });
+}

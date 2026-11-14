@@ -7,15 +7,20 @@ import {
   Modal,
   Animated,
   Switch,
+  ScrollView,
   Platform,
   Vibration,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Reminder } from '../types/reminder';
 import { setSolenoidLock } from '../services/hardware';
-import { computeTargetTriggerEpoch } from '../services/medicationLogic';
+import { calculateDoseOccurrence } from '../services/medicationLogic';
 
 interface Props {
+  drawerStatus?: React.ReactNode;
+  pendingReminders?: Reminder[];
+  onSelectReminder?: (id: string) => void;
   visible: boolean;
   reminder: Reminder | null;
   onConfirmDose: (reminder: Reminder) => void;
@@ -26,12 +31,16 @@ interface Props {
 const TOTAL_GRACE_PERIOD_SEC = 1200; // 20 minutes grace period per spec
 
 export default function MedicationAlertModal({
+  drawerStatus,
+  pendingReminders = [],
+  onSelectReminder,
   visible,
   reminder,
   onConfirmDose,
   onMissedDose,
   onDismiss,
 }: Props) {
+  const insets = useSafeAreaInsets();
   // Animation values
   const flashAnim = useRef(new Animated.Value(0)).current;
   const pulseScale = useRef(new Animated.Value(1)).current;
@@ -67,7 +76,7 @@ export default function MedicationAlertModal({
 
     if (visible && reminder) {
       // Calculate remaining grace period
-      const triggerEpochMs = computeTargetTriggerEpoch(reminder, new Date());
+      const triggerEpochMs = calculateDoseOccurrence(reminder).targetTriggerEpochMs;
       const diffMs = Date.now() - triggerEpochMs;
       const initialRemaining = Math.max(0, Math.floor((TOTAL_GRACE_PERIOD_SEC * 1000 - diffMs) / 1000));
       const alreadyMissed = diffMs > TOTAL_GRACE_PERIOD_SEC * 1000;
@@ -170,17 +179,14 @@ export default function MedicationAlertModal({
       // Grace period 20-min countdown timer
       if (!alreadyMissed && initialRemaining > 0) {
         timer = setInterval(() => {
-          setRemainingSec((prev) => {
-            if (prev <= 1) {
-              if (timer) clearInterval(timer);
-              setIsMissed(true);
-              setSolenoidOpen(false);
-              setSolenoidLock(drawerNum, false).catch(() => {});
-              onMissedDose?.(reminder);
-              return 0;
-            }
-            return prev - 1;
-          });
+          const remaining = Math.max(0, Math.ceil((triggerEpochMs + TOTAL_GRACE_PERIOD_SEC * 1000 - Date.now()) / 1000));
+          setRemainingSec(remaining);
+          if (remaining === 0) {
+            if (timer) clearInterval(timer);
+            setIsMissed(true);
+            setSolenoidOpen(false);
+            onMissedDose?.(reminder);
+          }
         }, 1000);
       }
     } else {
@@ -238,7 +244,7 @@ export default function MedicationAlertModal({
       onRequestClose={onDismiss}
       statusBarTranslucent
     >
-      <View style={styles.scrim}>
+      <View style={[styles.scrim, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 12 }]}>
         <Animated.View
           style={[
             styles.modalWrapper,
@@ -248,6 +254,7 @@ export default function MedicationAlertModal({
             },
           ]}
         >
+          <ScrollView style={{ width: '100%' }} contentContainerStyle={{ paddingVertical: 8 }}>
           <Animated.View
             style={[
               styles.modalCard,
@@ -256,6 +263,15 @@ export default function MedicationAlertModal({
               },
             ]}
           >
+            {drawerStatus}
+            {pendingReminders.length > 1 && <View style={{ padding: 10 }}>
+              <Text style={{ fontWeight: '700' }}>{pendingReminders.length} medicines pending — select a dose</Text>
+              <ScrollView horizontal style={{ maxHeight: 48 }}>
+                {pendingReminders.map((item) => <TouchableOpacity key={item.id} onPress={() => onSelectReminder?.(item.id)} accessibilityRole="button" accessibilityState={{ selected: item.id === reminder.id }} style={{ padding: 10, backgroundColor: item.id === reminder.id ? '#FED7AA' : '#F3F4F6', marginRight: 6, borderRadius: 8 }}>
+                  <Text>{item.compartment || 'Medicine'}</Text>
+                </TouchableOpacity>)}
+              </ScrollView>
+            </View>}
             {/* Top Banner (Flashing when alerting, Solid red when missed) */}
             <Animated.View
               style={[
@@ -497,12 +513,13 @@ export default function MedicationAlertModal({
                   activeOpacity={0.7}
                 >
                   <Ionicons name="alarm-outline" size={17} color="#6B7280" style={{ marginRight: 6 }} />
-                  <Text style={styles.dismissBtnText}>Snooze / Remind Later</Text>
+                  <Text style={styles.dismissBtnText}>Dismiss this alert</Text>
                 </TouchableOpacity>
               </>
             )}
           </View>
         </Animated.View>
+          </ScrollView>
         </Animated.View>
       </View>
     </Modal>
@@ -520,6 +537,7 @@ const styles = StyleSheet.create({
   modalWrapper: {
     width: '100%',
     maxWidth: 400,
+    maxHeight: '100%',
     alignItems: 'center',
   },
   modalCard: {
@@ -764,6 +782,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   confirmBtn: {
+    minHeight: 52,
+    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -777,6 +797,9 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   confirmBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
+    lineHeight: 20,
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800',
@@ -791,6 +814,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   dismissBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
+    lineHeight: 20,
     color: '#475569',
     fontSize: 13,
     fontWeight: '700',

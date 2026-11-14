@@ -198,3 +198,42 @@ From the mobile project directory:
 ```bash
 bunx eas-cli@latest build --platform android --profile preview --clear-cache
 ```
+
+## App drawer warnings and concurrent medicine alerts
+
+The app polls Arduino `/status` every two seconds while foregrounded. The app-side
+sensor contract is `drawer1_open: boolean` and `drawer2_open: boolean` (true means
+physically open). **The firmware currently in this workspace does not expose these
+fields yet.** No firmware was changed in this app-only implementation. Until those
+fields are provided, the app displays “status unavailable”, never a guessed closed
+state. Lock/unlock commands and LED activity are not physical door readings.
+
+Each open drawer shows an in-app warning and, if notification permission is already
+granted, a local notification. After 60 seconds of continuously observed open state,
+a second notification asks the user to close it. Closing clears the warning and
+resets the timer. Missing readings, disconnects, and backgrounding reset observation;
+returning to the app starts fresh checks. Live door monitoring does not run while
+the app is suspended or killed. Scheduled medicine notifications still operate as
+before. Door activity alone never confirms intake in the app.
+
+Concurrent due doses are queued without duplicates in one modal with selectable
+compartment tabs and a pending count. Confirming or dismissing one keeps the other
+pending doses. Dismissal does not send a hardware confirmation or record intake.
+The current hardware stop endpoint confirms globally, so the app sends it only
+when no other due dose remains pending. Manual confirmation records TAKEN_MANUAL; matching hardware events record TAKEN.
+All queued doses retain their original scheduled deadline; an expired dose is
+reconciled as missed. Dismissed occurrences are not repeatedly presented during the
+same foreground session.
+
+Taken compartment indicators are orange (#F97316), with a TAKEN label. The schedule
+badge and compartment-detail indicator also show orange. Stock warnings remain
+separate (including EMPTY for a taken final dose). Recurring schedules use the
+current occurrence's history, so yesterday's pickup does not color today's dose.
+
+Validation: `bun run test`, `bunx tsc --noEmit`, `bunx eslint src --no-cache`.
+Bench checks after the firmware sensor fields are available: open each drawer and
+both together, keep them open for a minute, close/reopen, disconnect Wi-Fi, and
+background/resume. Schedule concurrent doses in both drawers, switch between them,
+confirm one, and verify the other remains pending and only the confirmed indicator
+turns orange. Verify these flows on a physical device; unit tests do not validate
+native modal layout, notification delivery, or reed switches.

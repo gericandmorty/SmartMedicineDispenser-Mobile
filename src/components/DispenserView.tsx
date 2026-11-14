@@ -11,6 +11,8 @@ import { Reminder, AmPm, DoseEvent } from '../types/reminder';
 import { triggerHardwareDispense } from '../services/hardware';
 import { calculateColumnStock, calculateDoseOccurrence } from '../services/medicationLogic';
 import { Ionicons } from '@expo/vector-icons';
+import { useReminders } from '../hooks/useReminders';
+import DrawerStatusBanner from './DrawerStatusBanner';
 import CompartmentDetailModal from './CompartmentDetailModal';
 
 const CELL_H      = 74;               // Cell height
@@ -24,7 +26,7 @@ const COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 const ROWS = ['1', '2', '3'];
 
 // ─── Pulsing LED ─────────────────────────────────────────────────────────────
-function LED({ active, isOutOfStock, isMissed }: { active: boolean; isOutOfStock?: boolean; isMissed?: boolean }) {
+function LED({ active, isOutOfStock, isMissed, isTaken }: { active: boolean; isOutOfStock?: boolean; isMissed?: boolean; isTaken?: boolean }) {
   const ring  = useMemo(() => new Animated.Value(1), []);
   const ringO = useMemo(() => new Animated.Value(0), []);
 
@@ -42,8 +44,8 @@ function LED({ active, isOutOfStock, isMissed }: { active: boolean; isOutOfStock
   }, [active, ring, ringO]);
 
   const DOT = 8;
-  const pulseColor = isMissed || isOutOfStock ? '#EF4444' : '#4CAF50';
-  const dotColor = isMissed || isOutOfStock ? '#FF5252' : '#76FF03';
+  const pulseColor = isTaken ? '#F97316' : isMissed || isOutOfStock ? '#EF4444' : '#4CAF50';
+  const dotColor = isTaken ? '#F97316' : isMissed || isOutOfStock ? '#FF5252' : '#76FF03';
 
   return (
     <View style={{ width: DOT, height: DOT, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
@@ -74,6 +76,7 @@ function Cell({
   active,
   isOutOfStock,
   isMissed,
+  isTaken,
   reminder,
   onPress,
 }: {
@@ -82,6 +85,7 @@ function Cell({
   active: boolean;
   isOutOfStock?: boolean;
   isMissed?: boolean;
+  isTaken?: boolean;
   reminder?: Reminder;
   onPress: () => void;
 }) {
@@ -94,25 +98,25 @@ function Cell({
     <TouchableOpacity
       style={[
         s.cell,
-        active && (isMissed || isOutOfStock ? s.cellOutOfStock : s.cellActive),
+        active && (isTaken ? s.cellTaken : isMissed || isOutOfStock ? s.cellOutOfStock : s.cellActive),
       ]}
       onPress={onPress}
       activeOpacity={0.7}
       delayPressIn={0}
       hitSlop={{ top: 4, bottom: 4, left: 1, right: 1 }}
       accessibilityRole="button"
-      accessibilityLabel={`Compartment ${col}${row}${isMissed ? ' (Dosage Missed)' : isOutOfStock ? ' (Out of stock)' : ''}`}
+      accessibilityLabel={`Compartment ${col}${row}${isTaken ? ' (Medicine taken)' : isMissed ? ' (Dosage Missed)' : isOutOfStock ? ' (Out of stock)' : ''}`}
     >
       <View style={s.cellHeader} pointerEvents="none">
         <Text
           style={[
             s.cellLbl,
-            active && (isMissed || isOutOfStock ? s.cellLblOutOfStock : s.cellLblActive),
+            active && (isTaken ? s.cellTakenText : isMissed || isOutOfStock ? s.cellLblOutOfStock : s.cellLblActive),
           ]}
         >
           {col}{row}
         </Text>
-        <LED active={active} isOutOfStock={isOutOfStock} isMissed={isMissed} />
+        <LED active={active} isOutOfStock={isOutOfStock} isMissed={isMissed} isTaken={isTaken} />
       </View>
 
       {active ? (
@@ -121,6 +125,7 @@ function Cell({
             style={[
               s.cellTime,
               (isMissed || isOutOfStock) && s.cellTimeOutOfStock,
+              isTaken && s.cellTakenText,
             ]}
             numberOfLines={1}
           >
@@ -130,10 +135,11 @@ function Cell({
             style={[
               s.cellAmPm,
               (isMissed || isOutOfStock) && s.cellAmPmOutOfStock,
+              isTaken && s.cellTakenText,
             ]}
             numberOfLines={1}
           >
-            {isMissed ? 'MISSED' : isOutOfStock ? 'EMPTY' : amPm}
+            {isMissed ? 'MISSED' : isOutOfStock ? (isTaken ? 'TAKEN / EMPTY' : 'EMPTY') : isTaken ? 'TAKEN' : amPm}
           </Text>
         </View>
       ) : (
@@ -302,9 +308,9 @@ function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSe
               const isOutOfStock = reminder
                 ? calculateColumnStock(reminder, doseHistory).isOutOfStock
                 : false;
-              const isMissed = reminder
-                ? calculateDoseOccurrence(reminder, Date.now(), doseHistory).state === 'MISSED'
-                : false;
+              const state = reminder ? calculateDoseOccurrence(reminder, Date.now(), doseHistory).state : 'UPCOMING';
+              const isMissed = state === 'MISSED';
+              const isTaken = state === 'TAKEN' || state === 'TAKEN_MANUAL';
 
               return (
                 <Cell
@@ -314,6 +320,7 @@ function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSe
                   active={!!reminder}
                   isOutOfStock={isOutOfStock}
                   isMissed={isMissed}
+                  isTaken={isTaken}
                   reminder={reminder}
                   onPress={() => handleCellPress(col, row, ri, ci)}
                 />
@@ -345,6 +352,7 @@ export default function DispenserView({
   onOpenSetSchedule?: (params: CompartmentScheduleParams) => void;
   onRefillColumn?: (drawer: number, column: string) => void;
 }) {
+  const { drawers } = useReminders();
   const [selectedCell, setSelectedCell] = useState<{
     drawerIndex: number;
     col: string;
@@ -359,6 +367,8 @@ export default function DispenserView({
 
   return (
     <View style={{ marginBottom: 16, width: '100%' }}>
+      <DrawerStatusBanner drawers={drawers} />
+      <Text style={{ color: '#9A3412', marginVertical: 6 }}>Orange indicator = medicine taken</Text>
       <Text style={s.sectionLbl}>DISPENSER COMPARTMENTS (TAP CELL TO ADD)</Text>
       <DrawerPanel
         index={0}
@@ -493,6 +503,14 @@ const s = StyleSheet.create({
     backgroundColor: '#0A290C',
     borderWidth: 1.5,
     borderColor: '#4CAF50',
+  },
+  cellTaken: {
+    backgroundColor: '#2A1B0B',
+    borderWidth: 1.5,
+    borderColor: '#F59E0B',
+  },
+  cellTakenText: {
+    color: '#FDBA74',
   },
   cellOutOfStock: {
     backgroundColor: '#2D0A0A',

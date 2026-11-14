@@ -46,6 +46,9 @@ import {
   getESP32IP,
   autoDiscoverHardware,
 } from '../services/hardware';
+import { enqueueDose, removeDose, selectDose } from '../services/alertQueue';
+import { useDrawerStatus } from './useDrawerStatus';
+import DrawerStatusBanner from '../components/DrawerStatusBanner';
 import MedicationAlertModal from '../components/MedicationAlertModal';
 
 function sortReminders(data: Reminder[]): Reminder[] {
@@ -65,6 +68,7 @@ function sortReminders(data: Reminder[]): Reminder[] {
 }
 
 export interface RemindersContextType {
+  drawers: ReturnType<typeof useDrawerStatus>;
   reminders: Reminder[];
   doseHistory: DoseEvent[];
   loading: boolean;
@@ -92,7 +96,14 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   // Active Alert Modal State
-  const [activeAlertReminder, setActiveAlertReminder] = useState<Reminder | null>(null);
+  const [alertQueue, setAlertQueue] = useState<Reminder[]>([]);
+  const activeAlertReminder = alertQueue[0] ?? null;
+  const enqueueAlert = useCallback((reminder: Reminder) => {
+    setAlertQueue((queue) => enqueueDose(queue, reminder));
+  }, []);
+  const removeAlert = useCallback((id: string) => {
+    setAlertQueue((queue) => removeDose(queue, id));
+  }, []);
   const [alertModalVisible, setAlertModalVisible] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -133,6 +144,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
   }, [refresh, flushSyncQueue]);
 
   const [foreground, setForeground] = useState(AppState.currentState === 'active');
+  const drawers = useDrawerStatus(foreground);
   const [foregroundStartedAt, setForegroundStartedAt] = useState(() => Date.now());
   const foregroundGeneration = useRef(0);
   const presentedOccurrences = useRef(new Set<string>());
@@ -142,7 +154,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
       setForeground(state === 'active');
       // Never bring an old modal back before reconciling the controller.
       setAlertModalVisible(false);
-      setActiveAlertReminder(null);
+      setAlertQueue([]);
       if (state === 'active') {
         setForegroundStartedAt(Date.now());
         presentedOccurrences.current.clear();
@@ -164,14 +176,13 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
         const key = `${reminder.id}:${occurrence.triggerDate}`;
         if (presentedOccurrences.current.has(key)) continue;
         presentedOccurrences.current.add(key);
-        setActiveAlertReminder(reminder);
+        enqueueAlert(reminder);
         setAlertModalVisible(true);
-        break;
       }
     };
     const interval = setInterval(tick, 500);
     return () => clearInterval(interval);
-  }, [foreground, loading, reminders, doseHistory, foregroundStartedAt]);
+  }, [foreground, loading, reminders, doseHistory, foregroundStartedAt, enqueueAlert]);
 
   // Reconcile before presenting, including when no modal is currently visible.
   useEffect(() => {
@@ -202,17 +213,15 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
             history = await loadDoseHistory();
             if (stale()) return;
             setDoseHistory(history);
-            setActiveAlertReminder((active) => {
-              if (active?.id !== reminder.id) return active;
-              return null;
-            });
+            removeAlert(reminder.id);
             presentedOccurrences.current.add(key);
           } else if (shouldPresentDoseAlert(reminder, history, foregroundStartedAt, status) && !presentedOccurrences.current.has(key)) {
             presentedOccurrences.current.add(key);
-            setActiveAlertReminder(reminder);
+            enqueueAlert(reminder);
             setAlertModalVisible(true);
           } else if (occurrence.state === 'MISSED' && !history.some((event) =>
             event.scheduleId === reminder.id && event.triggerDate === occurrence.triggerDate)) {
+            removeAlert(reminder.id);
             await recordDoseResolution(reminder, 'MISSED', occurrence.targetTriggerEpochMs + GRACE_PERIOD_MS);
             history = await loadDoseHistory();
             if (stale()) return;
@@ -227,7 +236,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
     void poll();
     const interval = setInterval(() => { void poll(); }, 1200);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [foreground, loading, foregroundStartedAt, presentedOccurrences]);
+  }, [foreground, loading, foregroundStartedAt, presentedOccurrences, enqueueAlert, removeAlert]);
 
   const add = useCallback(async (reminder: Reminder): Promise<Reminder[]> => {
     if (reminder.isBulk || reminder.compartment?.includes(',')) {
@@ -274,6 +283,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
     const target = current.find((r) => r.id === id);
     await cancelReminderNotification(target?.notificationId || id);
     const updated = await deleteReminder(id);
+    removeAlert(id);
     const updatedHistory = await loadDoseHistory();
     const sorted = sortReminders(updated);
     startTransition(() => {
@@ -285,7 +295,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
     deleteScheduleFromESP32(id).catch((e) => {
       console.log('[useReminders] ESP32 Wi-Fi delete error:', e);
     });
-  }, []);
+  }, [removeAlert]);
 
   const resolveDose = useCallback(
     async (reminder: Reminder, resolution: DoseResolution): Promise<DoseEvent> => {
@@ -309,7 +319,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
     const stored = await loadReminders();
     await Promise.all(stored.map((r) => deleteScheduleFromESP32(r.id)));
     setAlertModalVisible(false);
-    setActiveAlertReminder(null);
+    setAlertQueue([]);
     await clearAllMedicineData();
     await refresh();
   }, [refresh]);
@@ -317,30 +327,31 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
   // Modal actions
   const confirmAlertDose = useCallback(
     async (reminder: Reminder) => {
-      await resolveDose(reminder, 'TAKEN');
-      silenceAlertOrConfirm(reminder.id).catch(() => {});
-      setAlertModalVisible(false);
-      setActiveAlertReminder(null);
+      await resolveDose(reminder, 'TAKEN_MANUAL');
+      removeAlert(reminder.id);
+      // Current firmware treats /stop-vibrate as a global confirmation even
+      // when schedule_id is supplied. Never clear another pending dose.
+      const [stored, history] = await Promise.all([loadReminders(), loadDoseHistory()]);
+      const anotherDosePending = stored.some((item) => item.id !== reminder.id &&
+        calculateDoseOccurrence(item, Date.now(), history).state === 'ALERTING');
+      if (!anotherDosePending) silenceAlertOrConfirm(reminder.id).catch(() => {});
     },
-    [resolveDose]
+    [resolveDose, removeAlert]
   );
 
   const missAlertDose = useCallback(
     async (reminder: Reminder) => {
       await resolveDose(reminder, 'MISSED');
-      silenceAlertOrConfirm(reminder.id).catch(() => {});
+      removeAlert(reminder.id);
       triggerImmediateMissedNotification(reminder.compartment || 'Dispenser').catch(() => {});
     },
-    [resolveDose]
+    [resolveDose, removeAlert]
   );
 
   const dismissAlertModal = useCallback(() => {
-    if (activeAlertReminder) {
-      silenceAlertOrConfirm(activeAlertReminder.id).catch(() => {});
-    }
-    setAlertModalVisible(false);
-    setActiveAlertReminder(null);
-  }, [activeAlertReminder]);
+    // Dismissal is not intake confirmation; preserve other pending doses.
+    if (activeAlertReminder) removeAlert(activeAlertReminder.id);
+  }, [activeAlertReminder, removeAlert]);
 
   const triggerManualTestAlert = useCallback(
     (customReminder?: Reminder) => {
@@ -359,14 +370,15 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
 
       const drawer = target.compartment?.includes('Drawer 2') ? 2 : 1;
       triggerHardwareAlert(target.compartment || 'Drawer 1 (A1)', drawer).catch(() => {});
-      setActiveAlertReminder(target);
+      enqueueAlert(target);
       setAlertModalVisible(true);
     },
-    [reminders]
+    [reminders, enqueueAlert]
   );
 
   const value = useMemo(
     () => ({
+      drawers,
       reminders,
       doseHistory,
       loading,
@@ -385,6 +397,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
       triggerManualTestAlert,
     }),
     [
+      drawers,
       reminders,
       doseHistory,
       loading,
@@ -409,10 +422,13 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
       {children}
       {/* Root Flashing Medication Alert Modal */}
       <MedicationAlertModal
+        key={activeAlertReminder?.id ?? 'no-alert'}
+        drawerStatus={<DrawerStatusBanner drawers={drawers} />}
+        pendingReminders={alertQueue}
+        onSelectReminder={(id) => setAlertQueue((queue) => selectDose(queue, id))}
         visible={foreground && alertModalVisible && activeAlertReminder !== null}
         reminder={activeAlertReminder}
         onConfirmDose={confirmAlertDose}
-        onMissedDose={missAlertDose}
         onDismiss={dismissAlertModal}
       />
     </RemindersContext.Provider>
