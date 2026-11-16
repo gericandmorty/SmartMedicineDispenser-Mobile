@@ -11,12 +11,15 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useReminders } from '../../hooks/useReminders';
 import {
   setSolenoidLock,
   pulseUnlockSolenoid,
 } from '../../services/hardware';
 
 export default function SettingsScreen() {
+  const { clearAll, reminders } = useReminders();
+  const [clearingSchedules, setClearingSchedules] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
 
@@ -71,6 +74,27 @@ export default function SettingsScreen() {
     } finally {
       setPulsing(false);
     }
+  };
+
+  const handleClearAllSchedules = () => {
+    Alert.alert(
+      'Clear all testing data?',
+      `This removes ${reminders.length} saved schedule${reminders.length === 1 ? '' : 's'}, dose history, and medicine notifications from this phone. It also asks the dispenser to delete synced schedules.`,
+      [
+        { text: 'Keep schedules', style: 'cancel' },
+        { text: 'Clear all', style: 'destructive', onPress: async () => {
+          setClearingSchedules(true);
+          try {
+            await clearAll();
+            Alert.alert('Testing data cleared', 'Saved schedules and dose history were removed from this phone.');
+          } catch (error) {
+            Alert.alert('Could not clear schedules', error instanceof Error ? error.message : 'Please try again.');
+          } finally {
+            setClearingSchedules(false);
+          }
+        } },
+      ],
+    );
   };
 
   return (
@@ -254,7 +278,7 @@ export default function SettingsScreen() {
               ['1. Prepare the dispenser', 'Power on the dispenser and connect your phone to the same Wi-Fi network. Load the medicine into the intended compartments in Drawer 1 or Drawer 2, then close the drawers. Allow notifications in your phone settings.'],
               ['2. Set a schedule', 'On My Schedule, select a drawer and compartment. Choose the time, check AM or PM, and select a specific date or a daily schedule. Save and check that the schedule has synced before leaving the app.'],
               ['3. Schedule several compartments', 'Choose Bulk Schedule, select the drawer and compartments, then set their shared time and date. Save a separate bulk schedule for the other drawer. Saved highlights follow the date and time selected in the picker.'],
-              ['4. Collect the medicine', 'When the alarm sounds, open the indicated drawer and collect the medicine from the lit compartments. Close the drawer afterward so the dispenser can record pickup. The alert window lasts 20 minutes.'],
+              ['4. Collect the medicine', 'When the alarm sounds, open the indicated drawer and collect the medicine from the lit compartments. Close the drawer afterward so the dispenser can record pickup. The alert window lasts 5 minutes.'],
               ['5. Check pickup history', 'Reopen the app while connected to the dispenser to sync pickup records. Review the schedule and dose history for taken or missed doses. The dispenser runs synced schedules even when the app is closed.'],
               ['6. Refill and use manual controls', 'Refill the appropriate compartments when stock is low. In Settings, select Drawer 1, Drawer 2, or Both Drawers before using the lock switch or the 5-second quick unlock.'],
             ].map(([title, description]) => (
@@ -265,12 +289,34 @@ export default function SettingsScreen() {
             ))}
           </View>
         </View>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Testing Tools</Text>
+          <View style={styles.card}>
+            <Text style={styles.settingLabel}>Start a fresh test</Text>
+            <Text style={styles.settingDesc}>Remove all saved schedules, dose history, and medicine notifications from this phone.</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              style={[styles.clearAllButton, clearingSchedules && styles.clearAllButtonDisabled]}
+              onPress={handleClearAllSchedules}
+              disabled={clearingSchedules}
+            >
+              {clearingSchedules ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="trash-outline" size={18} color="#FFFFFF" />}
+              <Text style={styles.clearAllButtonText}>{clearingSchedules ? 'Clearing...' : 'Clear all saved schedules'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  clearAllButton: {
+    marginTop: 16, backgroundColor: '#B42318', borderRadius: 12,
+    minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
+  clearAllButtonDisabled: { opacity: 0.65 },
+  clearAllButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
   safe: { flex: 1, backgroundColor: '#F5F0E8' },
   header: {
     alignItems: 'center',

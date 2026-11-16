@@ -1,14 +1,13 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Reminder, ColumnStockStatus, DoseEvent } from '../types/reminder';
+import { Reminder, DoseEvent } from '../types/reminder';
 import { calculateDoseOccurrence } from '../services/medicationLogic';
 import { triggerHardwareDispense } from '../services/hardware';
 
 interface Props {
   reminder: Reminder;
   onDelete: (id: string) => void;
-  stockStatus?: ColumnStockStatus;
   doseHistory?: DoseEvent[];
 }
 
@@ -38,8 +37,13 @@ function formatDateLabel(dateStr?: string): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export default function ReminderCard({ reminder, onDelete, stockStatus, doseHistory = [] }: Props) {
-  const occurrence = calculateDoseOccurrence(reminder, Date.now(), doseHistory);
+export default function ReminderCard({ reminder, onDelete, doseHistory = [] }: Props) {
+  const [nowEpoch, setNowEpoch] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowEpoch(Date.now()), 10000);
+    return () => clearInterval(timer);
+  }, []);
+  const occurrence = calculateDoseOccurrence(reminder, nowEpoch, doseHistory);
   const isMissed = occurrence.state === 'MISSED';
   const isAlerting = occurrence.state === 'ALERTING';
   const isTaken = occurrence.state === 'TAKEN' || occurrence.state === 'TAKEN_MANUAL';
@@ -59,7 +63,7 @@ export default function ReminderCard({ reminder, onDelete, stockStatus, doseHist
           {isMissed && (
             <View style={styles.missedTag}>
               <Ionicons name="alert-circle" size={11} color="#DC2626" style={{ marginRight: 3 }} />
-              <Text style={styles.missedTagText}>MISSED (20m passed)</Text>
+              <Text style={styles.missedTagText}>MISSED</Text>
             </View>
           )}
           {isAlerting && (
@@ -100,51 +104,6 @@ export default function ReminderCard({ reminder, onDelete, stockStatus, doseHist
             <Text style={styles.recurrence}>Every day</Text>
           )}
 
-          {stockStatus ? (
-            <View
-              style={[
-                styles.stockTag,
-                stockStatus.isOutOfStock
-                  ? styles.stockTagEmpty
-                  : stockStatus.isLowStock
-                  ? styles.stockTagLow
-                  : styles.stockTagOk,
-              ]}
-            >
-              <Ionicons
-                name={
-                  stockStatus.isOutOfStock
-                    ? 'alert-circle'
-                    : stockStatus.isLowStock
-                    ? 'warning-outline'
-                    : 'medkit-outline'
-                }
-                size={11}
-                color={
-                  stockStatus.isOutOfStock
-                    ? '#D32F2F'
-                    : stockStatus.isLowStock
-                    ? '#E65100'
-                    : '#1B5E20'
-                }
-                style={{ marginRight: 3 }}
-              />
-              <Text
-                style={[
-                  styles.stockTagText,
-                  stockStatus.isOutOfStock
-                    ? styles.stockTextEmpty
-                    : stockStatus.isLowStock
-                    ? styles.stockTextLow
-                    : styles.stockTextOk,
-                ]}
-              >
-                {stockStatus.isOutOfStock
-                  ? `Col ${stockStatus.column}: 0 left`
-                  : `Col ${stockStatus.column}: ${stockStatus.remainingDoses}/${stockStatus.cycleDays} left`}
-              </Text>
-            </View>
-          ) : null}
         </View>
       </View>
 

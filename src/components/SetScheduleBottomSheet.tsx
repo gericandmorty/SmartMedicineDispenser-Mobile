@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AmPm, Reminder } from '../types/reminder';
 import { loadReminders } from '../services/storage';
-import { getCurrentTime12, resolveBulkSchedule, matchesSchedulePicker } from '../services/medicationLogic';
+import { getCurrentTime12, resolveBulkSchedule, matchesSchedulePicker, validateScheduleConflict } from '../services/medicationLogic';
 
 const ITEM_HEIGHT = 46;
 const VISIBLE_COUNT = 3;
@@ -171,6 +171,8 @@ export interface SetScheduleParams {
   compartment?: string;
   slotIndex?: number;
   reminderId?: string;
+  quantity?: number;
+  addMedicine?: boolean;
   isBulk?: boolean;
   bulkSlots?: number[];
   bulkCompartments?: string[];
@@ -221,11 +223,17 @@ function SetScheduleContent({
   const [minute, setMinute] = useState<number>(() => initialParams?.minute ?? defaultTime.minute);
   const [amPm, setAmPm] = useState<AmPm>(() => initialParams?.amPm ?? defaultTime.amPm);
   const [dateMode, setDateMode] = useState<'today' | 'tomorrow' | 'daily' | 'custom'>(() =>
-    getInitialDateMode(initialParams?.date, todayStr, tomorrowStr)
+    getInitialDateMode(initialParams?.addMedicine ? todayStr : initialParams?.date ?? (initialParams?.reminderId ? undefined : todayStr), todayStr, tomorrowStr)
   );
   const [customDate, setCustomDate] = useState<string>(() => initialParams?.date || todayStr);
   const [showCalendar, setShowCalendar] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState('');
+  const [entryMode, setEntryMode] = useState<'one-time' | 'fixed'>(() =>
+    !initialParams?.addMedicine && (initialParams?.isBulk || initialParams?.bulkSlots?.length && initialParams.bulkSlots.length > 1 ||
+    (initialParams?.reminderId && !initialParams.date)) ? 'fixed' : 'one-time');
+  const [singleSlot, setSingleSlot] = useState<number | undefined>(() =>
+    initialParams?.slotIndex ?? resolveBulkSchedule({ compartment: initialParams?.compartment })?.slots[0]);
 
   const isInitialBulk = !!(
     initialParams?.isBulk ||
@@ -234,6 +242,7 @@ function SetScheduleContent({
   );
 
   const [scheduleType, setScheduleType] = useState<'single' | 'bulk'>(isInitialBulk ? 'bulk' : 'single');
+  const activeScheduleType = entryMode === 'one-time' ? 'single' : scheduleType;
   const [bulkDrawer, setBulkDrawer] = useState<1 | 2>(() => {
     if (initialParams?.compartment?.includes('Drawer 2') || (initialParams?.slotIndex ?? 0) >= 21) return 2;
     return 1;
@@ -328,13 +337,18 @@ function SetScheduleContent({
   }, [onClose]);
 
   const handleCommit = async () => {
-    if (saving || (scheduleType === 'bulk' && selectedBulkCompartments.length === 0)) return;
+    if (saving || (activeScheduleType === 'bulk' ? selectedBulkCompartments.length === 0 : singleSlot === undefined)) return;
+    const quantity = 1;
+    setSaveError('');
     setSaving(true);
 
     let finalDate: string | undefined = undefined;
     let recurrence: 'every-day' | 'once' = 'every-day';
 
-    if (dateMode === 'today') {
+    if (entryMode === 'fixed') {
+      finalDate = undefined;
+      recurrence = 'every-day';
+    } else if (dateMode === 'today') {
       finalDate = todayStr;
       recurrence = 'once';
     } else if (dateMode === 'tomorrow') {
@@ -351,7 +365,7 @@ function SetScheduleContent({
 
     let reminder: Reminder;
 
-    if (scheduleType === 'bulk') {
+    if (activeScheduleType === 'bulk') {
       const drawerBase = bulkDrawer === 2 ? 21 : 0;
       const sortedComps = [...selectedBulkCompartments].sort();
       const slots = sortedComps.map((comp) => {
@@ -369,6 +383,7 @@ function SetScheduleContent({
         minute,
         amPm,
         recurrence,
+        quantity,
         date: finalDate,
         createdAt: new Date().toISOString(),
         compartment: compLabel,
@@ -386,17 +401,24 @@ function SetScheduleContent({
         minute,
         amPm,
         recurrence,
+        quantity,
         date: finalDate,
         createdAt: new Date().toISOString(),
-        compartment: initialParams?.compartment,
-        slotIndex: initialParams?.slotIndex,
+        compartment: `Drawer ${Math.floor(singleSlot! / 21) + 1} (${String.fromCharCode(65 + singleSlot! % 7)}${Math.floor((singleSlot! % 21) / 7) + 1})`,
+        slotIndex: singleSlot,
+        isBulk: false,
       };
     }
 
     try {
+      const conflict = validateScheduleConflict(reminder, await loadReminders());
+      if (conflict.hasConflict) throw new Error(conflict.reason);
       await onSave(reminder);
-    } finally {
       handleDismiss();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not save the medicine. Please try again.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -406,7 +428,7 @@ function SetScheduleContent({
 
   // Custom date display string
   const customDateLabel = useMemo(() => {
-    if (!customDate) return 'Custom ▾';
+    if (!customDate) return 'Choose date ▾';
     const [y, m, d] = customDate.split('-').map(Number);
     const dateObj = new Date(y, m - 1, d);
     return `${dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ▾`;
@@ -436,7 +458,7 @@ function SetScheduleContent({
 
           <View style={styles.headerRow}>
             <Text style={styles.sheetTitle}>
-              {scheduleType === 'bulk' ? 'Set Bulk Schedule' : 'Set Schedule'}
+              {entryMode === 'one-time' ? 'Add Medicine' : 'Fixed Schedule'}
             </Text>
             <TouchableOpacity
               style={styles.closeBtn}
@@ -449,56 +471,56 @@ function SetScheduleContent({
           </View>
 
           <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: 8 }} nestedScrollEnabled showsVerticalScrollIndicator={false}>
-          {/* Mode Switcher: Single Slot vs Bulk Schedule */}
           <View style={styles.modeToggleRow}>
+            <TouchableOpacity style={[styles.modeTab, entryMode === 'one-time' && styles.modeTabActive]}
+              onPress={() => { setEntryMode('one-time'); setDateMode('today'); setShowCalendar(false); setSaveError(''); }}>
+              <Text style={[styles.modeTabText, entryMode === 'one-time' && styles.modeTabTextActive]}>One-time medicine</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.modeTab, entryMode === 'fixed' && styles.modeTabActive]}
+              onPress={() => { setEntryMode('fixed'); setDateMode('daily'); setShowCalendar(false); setSaveError(''); }}>
+              <Text style={[styles.modeTabText, entryMode === 'fixed' && styles.modeTabTextActive]}>Fixed schedule</Text>
+            </TouchableOpacity>
+          </View>
+          {/* Fixed schedules can cover one compartment or several. */}
+          {entryMode === 'fixed' && <View style={styles.modeToggleRow}>
             <TouchableOpacity
-              style={[styles.modeTab, scheduleType === 'single' && styles.modeTabActive]}
+              style={[styles.modeTab, activeScheduleType === 'single' && styles.modeTabActive]}
               onPress={() => setScheduleType('single')}
               activeOpacity={0.8}
             >
               <Ionicons
                 name="cube-outline"
                 size={14}
-                color={scheduleType === 'single' ? '#166534' : '#6B7280'}
+                color={activeScheduleType === 'single' ? '#166534' : '#6B7280'}
                 style={{ marginRight: 5 }}
               />
-              <Text style={[styles.modeTabText, scheduleType === 'single' && styles.modeTabTextActive]}>
-                Single Slot
+              <Text style={[styles.modeTabText, activeScheduleType === 'single' && styles.modeTabTextActive]}>
+                One Medicine
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.modeTab, scheduleType === 'bulk' && styles.modeTabActive]}
+              style={[styles.modeTab, activeScheduleType === 'bulk' && styles.modeTabActive]}
               onPress={() => setScheduleType('bulk')}
               activeOpacity={0.8}
             >
               <Ionicons
                 name="layers-outline"
                 size={14}
-                color={scheduleType === 'bulk' ? '#166534' : '#6B7280'}
+                color={activeScheduleType === 'bulk' ? '#166534' : '#6B7280'}
                 style={{ marginRight: 5 }}
               />
-              <Text style={[styles.modeTabText, scheduleType === 'bulk' && styles.modeTabTextActive]}>
+              <Text style={[styles.modeTabText, activeScheduleType === 'bulk' && styles.modeTabTextActive]}>
                 Bulk Schedule
               </Text>
             </TouchableOpacity>
-          </View>
+          </View>}
 
-          {/* Single Slot Pill */}
-          {scheduleType === 'single' && initialParams?.compartment ? (
-            <View style={styles.compartmentPill}>
-              <Ionicons name="cube-outline" size={13} color="#166534" style={{ marginRight: 5 }} />
-              <Text style={styles.compartmentText}>
-                {initialParams.compartment}
-              </Text>
-            </View>
-          ) : null}
-
-          {/* Bulk Selection Box */}
-          {scheduleType === 'bulk' && (
+          {/* Both modes allow picking a physical compartment. Single replaces selection. */}
+          {
             <View style={styles.bulkBox}>
               <View style={styles.bulkHeaderRow}>
-                <Text style={styles.bulkBoxTitle}>SELECT COMPARTMENTS</Text>
+                <Text style={styles.bulkBoxTitle}>{entryMode === 'one-time' ? 'SELECT ONE MEDICINE' : activeScheduleType === 'single' ? 'SELECT ONE COMPARTMENT' : 'SELECT COMPARTMENTS'}</Text>
                 <View style={styles.drawerToggleRow}>
                   <TouchableOpacity
                     style={[styles.drawerTab, bulkDrawer === 1 && styles.drawerTabActive]}
@@ -525,7 +547,9 @@ function SetScheduleContent({
                   <View key={r} style={styles.bulkGridRow}>
                     {COLS_LETTERS.map((c) => {
                       const compId = `${c}${r}`;
-                      const isDraftSelected = selectedBulkCompartments.includes(compId);
+                      const isDraftSelected = activeScheduleType === 'single'
+                        ? singleSlot === (bulkDrawer - 1) * 21 + (Number(r) - 1) * 7 + c.charCodeAt(0) - 65
+                        : selectedBulkCompartments.includes(compId);
                       const slot = (bulkDrawer - 1) * 21 + (Number(r) - 1) * 7 + c.charCodeAt(0) - 65;
                       const existing = matchingReminders.filter((item) =>
                         item.id !== initialParams?.reminderId && resolveBulkSchedule(item)?.slots.includes(slot));
@@ -535,7 +559,11 @@ function SetScheduleContent({
                           key={compId}
                           disabled={existing.length > 0}
                           style={[styles.bulkGridCell, isSelected && styles.bulkGridCellSelected]}
-                          onPress={() => toggleBulkCompartment(compId)}
+                          onPress={() => {
+                            setSaveError('');
+                            if (activeScheduleType === 'single') setSingleSlot(slot);
+                            else toggleBulkCompartment(compId);
+                          }}
                           activeOpacity={0.7}
                         >
                           <Text style={[styles.bulkGridCellText, isSelected && styles.bulkGridCellTextSelected]}>
@@ -549,7 +577,7 @@ function SetScheduleContent({
               </View>
 
               {/* Quick Presets & Reset */}
-              <View style={styles.bulkPresetRow}>
+              {activeScheduleType === 'bulk' && <View style={styles.bulkPresetRow}>
                 <TouchableOpacity style={styles.presetPill} onPress={() => selectColumnPreset('A')}>
                   <Text style={styles.presetPillText}>+ Col A</Text>
                 </TouchableOpacity>
@@ -562,7 +590,7 @@ function SetScheduleContent({
                 <TouchableOpacity style={styles.presetPillClear} onPress={clearBulkSelection}>
                   <Text style={styles.presetPillClearText}>Reset</Text>
                 </TouchableOpacity>
-              </View>
+              </View>}
 
               {matchingReminders.filter((item) => resolveBulkSchedule(item)?.slots.some((slot) => Math.floor(slot / 21) + 1 === bulkDrawer)).map((item) => (
                 <Text key={item.id} style={styles.bulkSummaryText}>
@@ -573,11 +601,13 @@ function SetScheduleContent({
                 <Ionicons name="layers" size={13} color="#166534" style={{ marginRight: 5 }} />
                 <Text style={styles.bulkSummaryText} numberOfLines={3}>
                   {savedLabels.length > 0 ? `Saved: ${savedLabels.join(', ')}. ` : ''}
-                  {selectedBulkCompartments.length > 0 ? `Selected: ${selectedBulkCompartments.join(', ')}` : 'Select compartments to add.'}
+                  {activeScheduleType === 'single'
+                    ? (singleSlot === undefined ? 'Select exactly one compartment.' : `One medicine: Drawer ${Math.floor(singleSlot / 21) + 1}, ${String.fromCharCode(65 + singleSlot % 7)}${Math.floor((singleSlot % 21) / 7) + 1}`)
+                    : selectedBulkCompartments.length > 0 ? `Selected: ${selectedBulkCompartments.join(', ')}` : 'Select compartments to add.'}
                 </Text>
               </View>
             </View>
-          )}
+          }
 
           {/* Section: TIME */}
           <Text style={styles.sectionHeader}>TIME</Text>
@@ -628,26 +658,12 @@ function SetScheduleContent({
           </View>
 
           {/* Section: DAYS */}
-          <Text style={styles.sectionHeader}>DAYS</Text>
-          <ScrollView
+          <Text style={styles.sectionHeader}>{entryMode === 'one-time' ? 'DATE' : 'REPEAT'}</Text>
+          {entryMode === 'fixed' ? <Text style={styles.bulkSummaryText}>Every day at this time</Text> : <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.chipRow}
           >
-            {/* Daily Chip */}
-            <TouchableOpacity
-              style={[styles.chip, dateMode === 'daily' && styles.chipSelected]}
-              onPress={() => {
-                setDateMode('daily');
-                setShowCalendar(false);
-              }}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.chipText, dateMode === 'daily' && styles.chipTextSelected]}>
-                Daily
-              </Text>
-            </TouchableOpacity>
-
             {/* Today Chip */}
             <TouchableOpacity
               style={[styles.chip, dateMode === 'today' && styles.chipSelected]}
@@ -691,13 +707,13 @@ function SetScheduleContent({
                   (dateMode === 'custom' || showCalendar) && styles.chipTextSelected,
                 ]}
               >
-                {dateMode === 'custom' ? customDateLabel : 'Custom ▾'}
+                {dateMode === 'custom' ? customDateLabel : 'Choose date ▾'}
               </Text>
             </TouchableOpacity>
-          </ScrollView>
+          </ScrollView>}
 
           {/* Quick Custom Date Stepper (if calendar/custom mode active) */}
-          {showCalendar && (
+          {entryMode === 'one-time' && showCalendar && (
             <View style={styles.customDateBar}>
               <TouchableOpacity
                 onPress={() => {
@@ -730,10 +746,14 @@ function SetScheduleContent({
             </View>
           )}
 
+          {entryMode === 'one-time' && <Text style={styles.bulkSummaryText}>
+            Only on {pickerDate}. This medicine will not repeat.
+          </Text>}
+          {saveError ? <Text accessibilityRole="alert" style={{ color: '#B91C1C', marginTop: 10 }}>{saveError}</Text> : null}
           {/* Primary Action Button: SAVE SCHEDULE */}
           <TouchableOpacity
-            style={[styles.saveBtn, (saving || (scheduleType === 'bulk' && selectedBulkCompartments.length === 0)) && { opacity: 0.5 }]}
-            disabled={saving || (scheduleType === 'bulk' && selectedBulkCompartments.length === 0)}
+            style={[styles.saveBtn, (saving || (activeScheduleType === 'bulk' ? selectedBulkCompartments.length === 0 : singleSlot === undefined)) && { opacity: 0.5 }]}
+            disabled={saving || (activeScheduleType === 'bulk' ? selectedBulkCompartments.length === 0 : singleSlot === undefined)}
             onPress={handleCommit}
             activeOpacity={0.85}
           >

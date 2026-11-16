@@ -1,6 +1,6 @@
 export const DRAWER_LEFT_OPEN_MS = 60_000;
 export type DoorState = 'open' | 'closed' | 'unknown';
-export interface DrawerReading { state: DoorState; openedAt: number | null; overdue: boolean }
+export interface DrawerReading { state: DoorState; openedAt: number | null; overdue: boolean; closureRequired?: boolean }
 export const unknownDrawer = (): DrawerReading => ({ state: 'unknown', openedAt: null, overdue: false });
 
 // Sensor contract for Arduino /status. Missing/invalid values are never closed.
@@ -13,4 +13,11 @@ export function updateDrawer(previous: DrawerReading, state: DoorState, now: num
   if (state !== 'open') return { state, openedAt: null, overdue: false };
   const openedAt = previous.state === 'open' ? previous.openedAt ?? now : now;
   return { state, openedAt, overdue: now - openedAt >= DRAWER_LEFT_OPEN_MS };
+}
+
+// Once shown, only fresh, explicit confirmation from BOTH reeds clears the warning.
+export function requiresCabinetClosure(previous: boolean, payload: unknown): boolean {
+  if (readDrawerState(payload, 1) === 'closed' && readDrawerState(payload, 2) === 'closed') return false;
+  return previous || (!!payload && typeof payload === 'object' &&
+    (payload as Record<string, unknown>).cabinet_close_required === true);
 }

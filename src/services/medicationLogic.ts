@@ -7,9 +7,9 @@ import type {
   AmPm,
 } from '../types/reminder.ts';
 
-export const GRACE_PERIOD_MINUTES = 20;
-export const GRACE_PERIOD_SECONDS = GRACE_PERIOD_MINUTES * 60; // 1200 seconds
-export const GRACE_PERIOD_MS = GRACE_PERIOD_SECONDS * 1000;    // 1,200,000 ms
+export const GRACE_PERIOD_MINUTES = 5;
+export const GRACE_PERIOD_SECONDS = GRACE_PERIOD_MINUTES * 60;
+export const GRACE_PERIOD_MS = GRACE_PERIOD_SECONDS * 1000;
 
 /**
  * Converts 12-hour format + AM/PM to 24-hour integer (0-23)
@@ -98,7 +98,7 @@ export interface DoseOccurrenceResult {
  * 
  * Logic Guarantee:
  * - Uses absolute epoch math (never in-memory intervals).
- * - Honors the 20-minute (1200-second) window.
+ * - Honors the 5-minute (300-second) window.
  * - Accurately transitions UPCOMING -> ALERTING -> TAKEN / MISSED.
  */
 export function calculateDoseOccurrence(
@@ -125,7 +125,7 @@ export function calculateDoseOccurrence(
     };
   }
 
-  // 2. No explicit log found yet. Evaluate current time relative to the 20-minute window.
+  // 2. No explicit log found yet. Evaluate current time relative to the 5-minute window.
   const diffMs = nowEpochMs - triggerEpochMs;
 
   if (diffMs < 0) {
@@ -139,8 +139,8 @@ export function calculateDoseOccurrence(
     };
   }
 
-  if (diffMs <= GRACE_PERIOD_MS) {
-    // Active within 20-minute window
+  if (diffMs < GRACE_PERIOD_MS) {
+    // Active within the 5-minute window
     const elapsedSeconds = Math.floor(diffMs / 1000);
     const remainingSeconds = Math.max(0, GRACE_PERIOD_SECONDS - elapsedSeconds);
     return {
@@ -152,7 +152,7 @@ export function calculateDoseOccurrence(
     };
   }
 
-  // More than 20 minutes elapsed without intake
+  // Five minutes elapsed without intake
   return {
     state: 'MISSED',
     remainingSeconds: 0,
@@ -160,6 +160,48 @@ export function calculateDoseOccurrence(
     targetTriggerEpochMs: triggerEpochMs,
     triggerDate: triggerDateStr,
   };
+}
+
+/** A later due dose takes over the dispenser, ending an earlier unconfirmed alert. */
+export function isDoseSuperseded(
+  reminder: Reminder,
+  reminders: Reminder[],
+  nowEpochMs: number = Date.now(),
+): boolean {
+  const target = computeTargetTriggerEpoch(reminder, new Date(nowEpochMs));
+  if (target > nowEpochMs) return false;
+  return reminders.some((other) => {
+    if (other.id === reminder.id || other.syncStatus === 'INACTIVE') return false;
+    const otherTarget = computeTargetTriggerEpoch(other, new Date(nowEpochMs));
+    return otherTarget > target && otherTarget <= nowEpochMs;
+  });
+}
+
+/** Missed cards remain visible independently of the newer dose's result. */
+export function selectVisibleMissedDoses(
+  reminders: Reminder[],
+  history: DoseEvent[],
+  acknowledgedKeys: string[],
+  nowEpochMs: number,
+): DoseEvent[] {
+  const recorded = history.filter((event) => event.resolution === 'MISSED');
+  const pending: DoseEvent[] = reminders.flatMap((reminder) => {
+    const occurrence = calculateDoseOccurrence(reminder, nowEpochMs, history);
+    if (occurrence.state !== 'ALERTING' || !isDoseSuperseded(reminder, reminders, nowEpochMs)) return [];
+    return [{
+      eventId: `pending-miss-${reminder.id}-${occurrence.triggerDate}`,
+      scheduleId: reminder.id,
+      compartment: reminder.compartment,
+      triggerDate: occurrence.triggerDate,
+      scheduledTimeFormatted: formatTime12(reminder.hour, reminder.minute, reminder.amPm, reminder.second),
+      targetTriggerEpoch: Math.floor(occurrence.targetTriggerEpochMs / 1000),
+      resolution: 'MISSED' as const,
+      elapsedSeconds: Math.floor((nowEpochMs - occurrence.targetTriggerEpochMs) / 1000),
+    }];
+  });
+  return [...recorded, ...pending]
+    .filter((event) => !acknowledgedKeys.includes(`${event.scheduleId}:${event.triggerDate}`))
+    .sort((a, b) => b.targetTriggerEpoch - a.targetTriggerEpoch);
 }
 
 /**
@@ -287,9 +329,10 @@ export function extractCompartmentCoords(
 export function calculateColumnStock(
   reminder: Reminder,
   doseHistory: DoseEvent[] = [],
-  cycleDays: number = 7,
+  cycleDays: number = 1,
   lastRefilledDateStr?: string,
-  referenceNow: Date = new Date()
+  referenceNow: Date = new Date(),
+  restockedAtEpochMs?: number
 ): ColumnStockStatus {
   const coords = extractCompartmentCoords(reminder.compartment, reminder.slotIndex);
   const compartmentLabel = `Drawer ${coords.drawer} (Column ${coords.column})`;
@@ -300,7 +343,9 @@ export function calculateColumnStock(
   // Count taken doses for this schedule since the last refill date
   const dosesTaken = doseHistory.filter((event) => {
     const isSameSchedule = event.scheduleId === reminder.id;
-    const isAfterRefill = event.triggerDate >= refillBaseline;
+    const isAfterRefill = restockedAtEpochMs !== undefined
+      ? (event.resolvedAtEpoch ?? event.targetTriggerEpoch) * 1000 > restockedAtEpochMs
+      : event.triggerDate >= refillBaseline;
     const isTaken = event.resolution === 'TAKEN' || event.resolution === 'TAKEN_MANUAL';
     return isSameSchedule && isAfterRefill && isTaken;
   }).length;
@@ -424,4 +469,38 @@ export function shouldPresentDoseAlert(
     Math.floor(savedAt / 60000) === Math.floor(occurrence.targetTriggerEpochMs / 60000);
   return occurrence.state === 'ALERTING' &&
     (savedForCurrentMinute || occurrence.targetTriggerEpochMs >= foregroundStartedAt || hardwareConfirmsActiveOccurrence(reminder, status, now));
+}
+
+/** A drawer is complete only when every dose due in its current 5-minute window is taken. */
+export function completedDrawer(reminders: Reminder[], history: DoseEvent[], drawer: 1 | 2, now = Date.now()): boolean {
+  const due = reminders.filter((reminder) => {
+    const targetDrawer = reminder.slotIndex !== undefined ? (reminder.slotIndex >= 21 ? 2 : 1) :
+      reminder.compartment?.includes('Drawer 2') ? 2 : 1;
+    if (targetDrawer !== drawer) return false;
+    const occurrence = calculateDoseOccurrence(reminder, now, history);
+    return now >= occurrence.targetTriggerEpochMs && now - occurrence.targetTriggerEpochMs < GRACE_PERIOD_MS;
+  });
+  return due.length > 0 && due.every((reminder) => {
+    const state = calculateDoseOccurrence(reminder, now, history).state;
+    return state === 'TAKEN' || state === 'TAKEN_MANUAL';
+  });
+}
+
+/** True once every saved medicine in a drawer is taken, until stock is added again. */
+export function drawerNeedsRestock(
+  reminders: Reminder[], history: DoseEvent[], drawer: 1 | 2, restockedAt = 0, now = Date.now()
+): boolean {
+  const inDrawer = reminders.filter(reminder => resolveBulkSchedule(reminder)?.slots.some(slot =>
+    Math.floor(slot / 21) + 1 === drawer));
+  const savedSlots = new Set(inDrawer.flatMap(reminder =>
+    (resolveBulkSchedule(reminder)?.slots ?? []).filter(slot => Math.floor(slot / 21) + 1 === drawer)));
+  // Every scheduled cell in this drawer must be taken; unused slots need no stock.
+  if (savedSlots.size === 0) return false;
+  if (!inDrawer.every(reminder => {
+    const state = calculateDoseOccurrence(reminder, now, history).state;
+    return state === 'TAKEN' || state === 'TAKEN_MANUAL';
+  })) return false;
+  return history.some(event => inDrawer.some(reminder => reminder.id === event.scheduleId) &&
+    (event.resolution === 'TAKEN' || event.resolution === 'TAKEN_MANUAL') &&
+    (event.resolvedAtEpoch ?? event.targetTriggerEpoch) * 1000 > restockedAt);
 }

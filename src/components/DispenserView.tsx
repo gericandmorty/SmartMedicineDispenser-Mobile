@@ -8,14 +8,14 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { Reminder, AmPm, DoseEvent } from '../types/reminder';
-import { triggerHardwareDispense } from '../services/hardware';
-import { calculateColumnStock, calculateDoseOccurrence } from '../services/medicationLogic';
+import { loadDrawerRestockTimes } from '../services/storage';
+import { calculateDoseOccurrence, drawerNeedsRestock } from '../services/medicationLogic';
 import { Ionicons } from '@expo/vector-icons';
 import { useReminders } from '../hooks/useReminders';
 import DrawerStatusBanner from './DrawerStatusBanner';
 import CompartmentDetailModal from './CompartmentDetailModal';
 
-const CELL_H      = 74;               // Cell height
+const CELL_H      = 88;               // Cell height
 const ROW_LABEL_W = 16;
 const COL_COUNT   = 7;
 const ROW_COUNT   = 3;
@@ -31,7 +31,7 @@ function LED({ active, isOutOfStock, isMissed, isTaken }: { active: boolean; isO
   const ringO = useMemo(() => new Animated.Value(0), []);
 
   useEffect(() => {
-    if (!active) { ring.setValue(1); ringO.setValue(0); return; }
+    if (!active || isOutOfStock) { ring.setValue(1); ringO.setValue(0); return; }
     ringO.setValue(0.5);
     const anim = Animated.loop(
       Animated.sequence([
@@ -41,11 +41,11 @@ function LED({ active, isOutOfStock, isMissed, isTaken }: { active: boolean; isO
     );
     anim.start();
     return () => anim.stop();
-  }, [active, ring, ringO]);
+  }, [active, isOutOfStock, ring, ringO]);
 
   const DOT = 8;
-  const pulseColor = isTaken ? '#F97316' : isMissed || isOutOfStock ? '#EF4444' : '#4CAF50';
-  const dotColor = isTaken ? '#F97316' : isMissed || isOutOfStock ? '#FF5252' : '#76FF03';
+  const pulseColor = isOutOfStock ? '#9CA3AF' : isTaken ? '#F97316' : isMissed || isOutOfStock ? '#EF4444' : '#4CAF50';
+  const dotColor = isOutOfStock ? '#9CA3AF' : isTaken ? '#F97316' : isMissed || isOutOfStock ? '#FF5252' : '#76FF03';
 
   return (
     <View style={{ width: DOT, height: DOT, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
@@ -98,20 +98,20 @@ function Cell({
     <TouchableOpacity
       style={[
         s.cell,
-        active && (isTaken ? s.cellTaken : isMissed || isOutOfStock ? s.cellOutOfStock : s.cellActive),
+        active && (isOutOfStock ? s.cellEmpty : isTaken ? s.cellTaken : isMissed ? s.cellOutOfStock : s.cellActive),
       ]}
       onPress={onPress}
       activeOpacity={0.7}
       delayPressIn={0}
       hitSlop={{ top: 4, bottom: 4, left: 1, right: 1 }}
       accessibilityRole="button"
-      accessibilityLabel={`Compartment ${col}${row}${isTaken ? ' (Medicine taken)' : isMissed ? ' (Dosage Missed)' : isOutOfStock ? ' (Out of stock)' : ''}`}
+      accessibilityLabel={`Compartment ${col}${row}${isOutOfStock ? ', drawer completed' : ''}${isTaken ? ', medicine taken' : isMissed ? ', dose missed' : ''}`}
     >
       <View style={s.cellHeader} pointerEvents="none">
         <Text
           style={[
             s.cellLbl,
-            active && (isTaken ? s.cellTakenText : isMissed || isOutOfStock ? s.cellLblOutOfStock : s.cellLblActive),
+            active && (isOutOfStock ? s.cellEmptyText : isTaken ? s.cellTakenText : isMissed ? s.cellLblOutOfStock : s.cellLblActive),
           ]}
         >
           {col}{row}
@@ -126,6 +126,7 @@ function Cell({
               s.cellTime,
               (isMissed || isOutOfStock) && s.cellTimeOutOfStock,
               isTaken && s.cellTakenText,
+              isOutOfStock && s.cellEmptyText,
             ]}
             numberOfLines={1}
           >
@@ -136,10 +137,11 @@ function Cell({
               s.cellAmPm,
               (isMissed || isOutOfStock) && s.cellAmPmOutOfStock,
               isTaken && s.cellTakenText,
+              isOutOfStock && s.cellEmptyText,
             ]}
             numberOfLines={1}
           >
-            {isMissed ? 'MISSED' : isOutOfStock ? (isTaken ? 'TAKEN / EMPTY' : 'EMPTY') : isTaken ? 'TAKEN' : amPm}
+            {isOutOfStock ? 'ALL TAKEN' : isMissed ? 'MISSED' : isTaken ? 'TAKEN' : amPm}
           </Text>
         </View>
       ) : (
@@ -166,6 +168,8 @@ export interface CompartmentScheduleParams {
   date?: string;
   reminderId?: string;
   isBulk?: boolean;
+  quantity?: number;
+  addMedicine?: boolean;
   bulkSlots?: number[];
   bulkCompartments?: string[];
 }
@@ -174,12 +178,19 @@ interface DrawerProps {
   index: number;
   allReminders: Reminder[];
   doseHistory?: DoseEvent[];
+  restockTimes: Record<string, number>;
   onOpenSetSchedule?: (params: CompartmentScheduleParams) => void;
+  onOpenRestock?: (drawer: 1 | 2) => void;
   onSelectCell: (drawerIndex: number, col: string, row: string, reminder: Reminder) => void;
 }
 
-function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSelectCell }: DrawerProps) {
-  const [open, setOpen] = useState(index === 0); // Open Drawer 1 by default
+function DrawerPanel({ index, allReminders, doseHistory, restockTimes, onOpenSetSchedule, onOpenRestock, onSelectCell }: DrawerProps) {
+  const [open, setOpen] = useState(index === 0);
+  const [nowEpoch, setNowEpoch] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowEpoch(Date.now()), 15000);
+    return () => clearInterval(timer);
+  }, []); // Open Drawer 1 by default
   const anim   = useMemo(() => new Animated.Value(index === 0 ? OPEN_H : CLOSED_H), [index]);
   const rotate = useMemo(() => new Animated.Value(index === 0 ? 1 : 0), [index]);
 
@@ -196,6 +207,7 @@ function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSe
 
   // Map slots for this drawer (index 0: slots 0..20, index 1: slots 21..41)
   const drawerBaseIndex = index * SLOTS;
+  const allDrawerMedicineTaken = drawerNeedsRestock(allReminders, doseHistory ?? [], (index + 1) as 1 | 2, restockTimes[String(index + 1)] ?? 0, nowEpoch);
 
   // Find active count for this drawer
   const drawerActiveCount = useMemo(() => {
@@ -261,17 +273,24 @@ function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSe
 
   return (
     <View style={s.cabinet}>
-      {/* Header row */}
-      <TouchableOpacity style={s.header} onPress={toggle} activeOpacity={0.85}>
-        <View style={s.headerLeft}>
+      {/* Drawer status and explicit restock action */}
+      <View style={s.header}>
+        <TouchableOpacity style={s.headerLeft} onPress={toggle} activeOpacity={0.85}>
           <Ionicons name="layers-outline" size={17} color="#76FF03" style={{ marginRight: 8 }} />
           <Text style={s.headerTitle}>Drawer {index + 1}</Text>
-          <Text style={s.headerCount}>{drawerActiveCount}/{SLOTS} active</Text>
-        </View>
-        <Animated.View style={{ transform: [{ rotate: chevron }] }}>
-          <Ionicons name="chevron-down" size={20} color="#76FF03" />
-        </Animated.View>
-      </TouchableOpacity>
+          <Text style={s.headerCount}>{allDrawerMedicineTaken ? `0/${SLOTS}` : `${drawerActiveCount}/${SLOTS} active`}</Text>
+        </TouchableOpacity>
+        {allDrawerMedicineTaken && onOpenRestock ? (
+          <TouchableOpacity style={s.restockHeaderButton} onPress={() => onOpenRestock((index + 1) as 1 | 2)} accessibilityRole="button" accessibilityLabel={`Add medicine to Drawer ${index + 1}`}>
+            <Text style={s.restockHeaderButtonText}>Add Medicine</Text>
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity onPress={toggle} accessibilityRole="button" accessibilityLabel={`Toggle Drawer ${index + 1}`}>
+          <Animated.View style={{ transform: [{ rotate: chevron }] }}>
+            <Ionicons name="chevron-down" size={20} color="#76FF03" />
+          </Animated.View>
+        </TouchableOpacity>
+      </View>
 
       {/* Expandable grid with visible overflow when open for flawless Android touch response */}
       <Animated.View style={{ height: anim, overflow: open ? 'visible' : 'hidden' }}>
@@ -305,12 +324,14 @@ function DrawerPanel({ index, allReminders, doseHistory, onOpenSetSchedule, onSe
                 return false;
               });
 
-              const isOutOfStock = reminder
-                ? calculateColumnStock(reminder, doseHistory).isOutOfStock
-                : false;
+              const isOutOfStock = allDrawerMedicineTaken;
               const state = reminder ? calculateDoseOccurrence(reminder, Date.now(), doseHistory).state : 'UPCOMING';
               const isMissed = state === 'MISSED';
-              const isTaken = state === 'TAKEN' || state === 'TAKEN_MANUAL';
+              const latestTaken = (doseHistory ?? []).filter(event => event.scheduleId === reminder?.id &&
+                (event.resolution === 'TAKEN' || event.resolution === 'TAKEN_MANUAL'))
+                .reduce((latest, event) => Math.max(latest, (event.resolvedAtEpoch ?? event.targetTriggerEpoch) * 1000), 0);
+              const isTaken = (state === 'TAKEN' || state === 'TAKEN_MANUAL') &&
+                latestTaken > (restockTimes[String(index + 1)] ?? 0);
 
               return (
                 <Cell
@@ -344,15 +365,21 @@ export default function DispenserView({
   doseHistory,
   onDeleteReminder,
   onOpenSetSchedule,
-  onRefillColumn,
+  onOpenRestock,
 }: {
   reminders: Reminder[];
   doseHistory?: DoseEvent[];
   onDeleteReminder?: (id: string) => void;
   onOpenSetSchedule?: (params: CompartmentScheduleParams) => void;
-  onRefillColumn?: (drawer: number, column: string) => void;
+  onOpenRestock?: (drawer: 1 | 2) => void;
 }) {
   const { drawers } = useReminders();
+  const [restockTimes, setRestockTimes] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let cancelled = false;
+    void loadDrawerRestockTimes().then(times => { if (!cancelled) setRestockTimes(times); });
+    return () => { cancelled = true; };
+  }, [reminders, doseHistory]);
   const [selectedCell, setSelectedCell] = useState<{
     drawerIndex: number;
     col: string;
@@ -360,28 +387,27 @@ export default function DispenserView({
     reminder: Reminder;
   } | null>(null);
 
-  const selectedStock = useMemo(() => {
-    if (!selectedCell?.reminder) return undefined;
-    return calculateColumnStock(selectedCell.reminder, doseHistory);
-  }, [selectedCell, doseHistory]);
-
   return (
     <View style={{ marginBottom: 16, width: '100%' }}>
       <DrawerStatusBanner drawers={drawers} />
-      <Text style={{ color: '#9A3412', marginVertical: 6 }}>Orange indicator = medicine taken</Text>
+      <Text style={{ color: '#9A3412', marginVertical: 6 }}>Orange = taken · Gray = all drawer medicine taken</Text>
       <Text style={s.sectionLbl}>DISPENSER COMPARTMENTS (TAP CELL TO ADD)</Text>
       <DrawerPanel
         index={0}
         allReminders={reminders}
+        restockTimes={restockTimes}
         doseHistory={doseHistory}
         onOpenSetSchedule={onOpenSetSchedule}
+        onOpenRestock={onOpenRestock}
         onSelectCell={(d, c, r, rem) => setSelectedCell({ drawerIndex: d, col: c, row: r, reminder: rem })}
       />
       <DrawerPanel
         index={1}
         allReminders={reminders}
+        restockTimes={restockTimes}
         doseHistory={doseHistory}
         onOpenSetSchedule={onOpenSetSchedule}
+        onOpenRestock={onOpenRestock}
         onSelectCell={(d, c, r, rem) => setSelectedCell({ drawerIndex: d, col: c, row: r, reminder: rem })}
       />
 
@@ -391,32 +417,11 @@ export default function DispenserView({
         col={selectedCell?.col ?? 'A'}
         row={selectedCell?.row ?? '1'}
         reminder={selectedCell?.reminder}
-        stockStatus={selectedStock}
         doseHistory={doseHistory}
         onClose={() => setSelectedCell(null)}
-        onDispense={(rem) => triggerHardwareDispense(rem)}
-        onChangeTime={(rem) => {
-          const cell = selectedCell;
-          setSelectedCell(null);
-          if (onOpenSetSchedule && cell) {
-            onOpenSetSchedule({
-              compartment: rem.compartment || `Drawer ${cell.drawerIndex + 1} (${cell.col}${cell.row})`,
-              slotIndex: rem.slotIndex ?? 0,
-              hour: rem.hour,
-              minute: rem.minute,
-              second: rem.second,
-              amPm: rem.amPm,
-              date: rem.date ?? '',
-              reminderId: rem.id,
-            });
-          }
-        }}
         onDelete={(id) => {
           setSelectedCell(null);
           if (onDeleteReminder) onDeleteReminder(id);
-        }}
-        onRefill={(drawer, column) => {
-          if (onRefillColumn) onRefillColumn(drawer, column);
         }}
       />
     </View>
@@ -451,7 +456,9 @@ const s = StyleSheet.create({
     backgroundColor: '#242424',
     paddingHorizontal: 16, paddingVertical: 14,
   },
-  headerLeft: { flexDirection: 'row', alignItems: 'center' },
+  restockHeaderButton: { backgroundColor: '#F59E0B', paddingHorizontal: 8, paddingVertical: 6, borderRadius: 7, marginRight: 10 },
+  restockHeaderButtonText: { color: '#111827', fontSize: 11, fontWeight: '800' },
+  headerLeft: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   headerTitle: { fontSize: 15, fontWeight: '800', color: '#FFF', letterSpacing: 0.4 },
   headerCount: { fontSize: 12, color: '#76FF03', fontWeight: '700', marginLeft: 10 },
 
@@ -503,6 +510,15 @@ const s = StyleSheet.create({
     backgroundColor: '#0A290C',
     borderWidth: 1.5,
     borderColor: '#4CAF50',
+  },
+  cellEmpty: {
+    backgroundColor: '#4B5563',
+    borderWidth: 1.5,
+    borderColor: '#9CA3AF',
+  },
+  cellEmptyText: { color: '#E5E7EB' },
+  cellRemaining: {
+    fontSize: 9, fontWeight: '700', color: '#D1FAE5', textAlign: 'center', marginBottom: 3,
   },
   cellTaken: {
     backgroundColor: '#2A1B0B',
