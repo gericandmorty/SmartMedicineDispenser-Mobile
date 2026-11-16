@@ -11,19 +11,15 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useReminders } from '../../hooks/useReminders';
 import {
   setSolenoidLock,
   pulseUnlockSolenoid,
 } from '../../services/hardware';
-import {
-  seedPhasedOutMedicineData,
-  recordColumnRefill,
-} from '../../services/storage';
-import { useReminders } from '../../hooks/useReminders';
 
 export default function SettingsScreen() {
-  const { triggerManualTestAlert, clearAll, refresh } = useReminders();
-
+  const { clearAll, reminders } = useReminders();
+  const [clearingSchedules, setClearingSchedules] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
 
@@ -80,41 +76,29 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleSeedPhasedOut = async () => {
-    await seedPhasedOutMedicineData();
-    await refresh();
+  const handleClearAllSchedules = () => {
     Alert.alert(
-      '📦 0/7 Doses Inserted & Push Notification Sent',
-      'Drawer 1 Column A now has 0/7 doses remaining.\n\nA push notification was triggered to your phone\'s notification bar!'
-    );
-  };
-
-  const handleResetStock = async () => {
-    await recordColumnRefill(1, 'A');
-    await refresh();
-    Alert.alert('🔄 Stock Reset', 'Drawer 1 Column A refilled to 7/7 doses.');
-  };
-
-  const handleClearDatabase = async () => {
-    Alert.alert(
-      'Clear SQLite Database',
-      'Are you sure you want to clear all reminders and history from the SQLite database? This will completely wipe stale and active schedules.',
+      'Clear all testing data?',
+      `This removes ${reminders.length} saved schedule${reminders.length === 1 ? '' : 's'}, dose history, and medicine notifications from this phone. It also asks the dispenser to delete synced schedules.`,
       [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Clear All',
-          style: 'destructive',
-          onPress: async () => {
+        { text: 'Keep schedules', style: 'cancel' },
+        { text: 'Clear all', style: 'destructive', onPress: async () => {
+          setClearingSchedules(true);
+          try {
             await clearAll();
-            Alert.alert('Database Cleared', 'All reminders and dose history have been cleared.');
-          },
-        },
-      ]
+            Alert.alert('Testing data cleared', 'Saved schedules and dose history were removed from this phone.');
+          } catch (error) {
+            Alert.alert('Could not clear schedules', error instanceof Error ? error.message : 'Please try again.');
+          } finally {
+            setClearingSchedules(false);
+          }
+        } },
+      ],
     );
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <View style={styles.header}>
         <Text style={styles.title}>Settings</Text>
       </View>
@@ -238,17 +222,6 @@ export default function SettingsScreen() {
               </Text>
             </TouchableOpacity>
 
-            {/* Test Flashing Medication Alert Modal Button */}
-            <TouchableOpacity
-              style={styles.testModalBtn}
-              onPress={() => triggerManualTestAlert()}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="alarm" size={17} color="#15803D" style={{ marginRight: 6 }} />
-              <Text style={styles.testModalBtnText}>
-                🚨 Test Medicine Alarm (Flashing Modal)
-              </Text>
-            </TouchableOpacity>
           </View>
         </View>
 
@@ -293,50 +266,6 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* ── SQLite Database & Stock Simulation ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>SQLite Database & Stock Simulation</Text>
-          <View style={styles.card}>
-            <Text style={styles.settingLabel}>Medicine Stock Simulation</Text>
-            <Text style={styles.settingDesc}>
-              Insert mock history to test the 0/7 doses &quot;Out of Stock&quot; notification, red badges, and refilled flow directly in SQLite.
-            </Text>
-
-            <TouchableOpacity
-              style={[styles.actionBtn, { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' }]}
-              onPress={handleSeedPhasedOut}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="flask-outline" size={17} color="#B91C1C" style={{ marginRight: 8 }} />
-              <Text style={[styles.actionBtnText, { color: '#B91C1C' }]}>
-                Insert 0/7 Doses (Phased Out Demo)
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.actionBtn, { marginTop: 8 }]}
-              onPress={handleResetStock}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="refresh" size={17} color="#1B5E20" style={{ marginRight: 8 }} />
-              <Text style={styles.actionBtnText}>
-                Reset Column A to 7/7 Doses
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.actionBtn, { backgroundColor: '#F3F4F6', borderColor: '#E5E7EB', marginTop: 8 }]}
-              onPress={handleClearDatabase}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="trash-outline" size={17} color="#4B5563" style={{ marginRight: 8 }} />
-              <Text style={[styles.actionBtnText, { color: '#4B5563' }]}>
-                Clear All SQLite Records
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
         {/* ── System Guide ── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>How to Use the System</Text>
@@ -349,7 +278,7 @@ export default function SettingsScreen() {
               ['1. Prepare the dispenser', 'Power on the dispenser and connect your phone to the same Wi-Fi network. Load the medicine into the intended compartments in Drawer 1 or Drawer 2, then close the drawers. Allow notifications in your phone settings.'],
               ['2. Set a schedule', 'On My Schedule, select a drawer and compartment. Choose the time, check AM or PM, and select a specific date or a daily schedule. Save and check that the schedule has synced before leaving the app.'],
               ['3. Schedule several compartments', 'Choose Bulk Schedule, select the drawer and compartments, then set their shared time and date. Save a separate bulk schedule for the other drawer. Saved highlights follow the date and time selected in the picker.'],
-              ['4. Collect the medicine', 'When the alarm sounds, open the indicated drawer and collect the medicine from the lit compartments. Close the drawer afterward so the dispenser can record pickup. The alert window lasts 20 minutes.'],
+              ['4. Collect the medicine', 'When the alarm sounds, open the indicated drawer and collect the medicine from the lit compartments. Close the drawer afterward so the dispenser can record pickup. The alert window lasts 5 minutes.'],
               ['5. Check pickup history', 'Reopen the app while connected to the dispenser to sync pickup records. Review the schedule and dose history for taken or missed doses. The dispenser runs synced schedules even when the app is closed.'],
               ['6. Refill and use manual controls', 'Refill the appropriate compartments when stock is low. In Settings, select Drawer 1, Drawer 2, or Both Drawers before using the lock switch or the 5-second quick unlock.'],
             ].map(([title, description]) => (
@@ -360,12 +289,34 @@ export default function SettingsScreen() {
             ))}
           </View>
         </View>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Testing Tools</Text>
+          <View style={styles.card}>
+            <Text style={styles.settingLabel}>Start a fresh test</Text>
+            <Text style={styles.settingDesc}>Remove all saved schedules, dose history, and medicine notifications from this phone.</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              style={[styles.clearAllButton, clearingSchedules && styles.clearAllButtonDisabled]}
+              onPress={handleClearAllSchedules}
+              disabled={clearingSchedules}
+            >
+              {clearingSchedules ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="trash-outline" size={18} color="#FFFFFF" />}
+              <Text style={styles.clearAllButtonText}>{clearingSchedules ? 'Clearing...' : 'Clear all saved schedules'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  clearAllButton: {
+    marginTop: 16, backgroundColor: '#B42318', borderRadius: 12,
+    minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
+  clearAllButtonDisabled: { opacity: 0.65 },
+  clearAllButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
   safe: { flex: 1, backgroundColor: '#F5F0E8' },
   header: {
     alignItems: 'center',
@@ -566,38 +517,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#B45309',
-  },
-  testModalBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F0FDF4',
-    borderRadius: 12,
-    paddingVertical: 12,
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: '#BBF7D0',
-  },
-  testModalBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#15803D',
-  },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#E8F5E9',
-    borderRadius: 10,
-    paddingVertical: 12,
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: '#A5D6A7',
-  },
-  actionBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#1B5E20',
   },
   guideStep: {
     marginTop: 18,

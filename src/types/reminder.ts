@@ -23,6 +23,7 @@ export interface Reminder {
   createdAt: string; // ISO string
   compartment?: string; // e.g. "Drawer 1 (A1)" or "Drawer 1 (A1, A2, A3)"
   slotIndex?: number;   // 0-41
+  quantity?: number;    // User-entered starting doses for this medicine
   syncStatus?: ScheduleConfigState; // default ACTIVE or SYNC_PENDING
   isBulk?: boolean;
   bulkSlots?: number[]; // e.g. [0, 1, 2]
@@ -54,6 +55,10 @@ export interface HardwareAlertState {
 
 export interface HardwareStatus {
   status: 'online' | 'offline';
+  unresolved_missed_dose?: boolean;
+  drawer1_open?: boolean;
+  drawer2_open?: boolean;
+  cabinet_close_required?: boolean;
   device?: string;
   ip?: string;
   time?: string;

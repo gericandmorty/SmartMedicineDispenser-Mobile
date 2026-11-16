@@ -5,9 +5,11 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
+  Modal,
   TouchableOpacity,
   Animated,
   Switch,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -17,17 +19,88 @@ import ReminderCard from '../../components/ReminderCard';
 import PrimaryButton from '../../components/PrimaryButton';
 import DispenserView, { CompartmentScheduleParams } from '../../components/DispenserView';
 import SetScheduleBottomSheet, { SetScheduleParams } from '../../components/SetScheduleBottomSheet';
-import { Reminder } from '../../types/reminder';
-import { calculateColumnStock } from '../../services/medicationLogic';
-import { recordColumnRefill } from '../../services/storage';
-import { setSolenoidLock } from '../../services/hardware';
+import { AmPm, Reminder } from '../../types/reminder';
+import { drawerNeedsRestock, resolveBulkSchedule } from '../../services/medicationLogic';
+import { loadDrawerRestockTimes, recordDrawerRestock } from '../../services/storage';
+import { setSolenoidLock, triggerBuzzerRelayTest, fetchHardwareStatus } from '../../services/hardware';
 
 const toastFade = new Animated.Value(0);
 const toastTranslate = new Animated.Value(-30);
 
 export default function HomeScreen() {
-  const { reminders, doseHistory, loading, refresh, add, remove, seedPhasedOut } = useReminders();
+  const { reminders, doseHistory, drawers, missedDoseCount, openMissedReview, loading, refresh, add, remove } = useReminders();
   const [sheetVisible, setSheetVisible] = useState(false);
+  const [restockTimes, setRestockTimes] = useState<Record<string, number>>({});
+  const [restockTimesLoaded, setRestockTimesLoaded] = useState(false);
+  const [restockSaving, setRestockSaving] = useState(false);
+  const [restockUnlocked, setRestockUnlocked] = useState(false);
+  const [restockError, setRestockError] = useState('');
+  const [restockVersion, setRestockVersion] = useState(0);
+  useEffect(() => { void loadDrawerRestockTimes().then(times => { setRestockTimes(times); setRestockTimesLoaded(true); }); }, [restockVersion]);
+  const [restockDrawer, setRestockDrawer] = useState<1 | 2 | null>(null);
+  const [editingRestockId, setEditingRestockId] = useState<string | null>(null);
+  const [editHour, setEditHour] = useState('');
+  const [editMinute, setEditMinute] = useState('');
+  const [editAmPm, setEditAmPm] = useState<AmPm>('AM');
+  const openRestock = (drawer: 1 | 2) => {
+    if (!restockTimesLoaded || loading || !drawerNeedsRestock(reminders, doseHistory, drawer, restockTimes[String(drawer)] ?? 0)) return;
+    setRestockDrawer(drawer);
+    setRestockError('');
+    setRestockUnlocked(false);
+    void setSolenoidLock(drawer, true).then(setRestockUnlocked).catch(() => setRestockUnlocked(false));
+    void triggerBuzzerRelayTest().catch(() => {});
+  };
+  const closeRestock = () => {
+    if (restockSaving) return;
+    if (restockDrawer !== null) void setSolenoidLock(restockDrawer, false).catch(() => {});
+    setRestockDrawer(null);
+    setEditingRestockId(null);
+  };
+  const saveRestockTime = async (reminder: Reminder) => {
+    const hour = Number(editHour);
+    const minute = Number(editMinute);
+    if (!Number.isInteger(hour) || hour < 1 || hour > 12 || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+      setRestockError('Enter a valid time (hour 1–12, minute 0–59).');
+      return;
+    }
+    setRestockSaving(true);
+    try {
+      await add({ ...reminder, hour, minute, amPm: editAmPm, quantity: 1, syncStatus: 'SYNC_PENDING' });
+      setRestockError('');
+      setEditingRestockId(null);
+    } catch (error) {
+      setRestockError(error instanceof Error ? error.message : 'Could not save the new time.');
+    } finally { setRestockSaving(false); }
+  };
+  const restockItems = restockDrawer === null ? [] : [...new Map(reminders.flatMap(reminder =>
+    (resolveBulkSchedule(reminder)?.slots ?? [])
+      .filter(slot => Math.floor(slot / 21) + 1 === restockDrawer)
+      .map(slot => [slot, `${String.fromCharCode(65 + slot % 7)}${Math.floor((slot % 21) / 7) + 1}`] as const)
+  )).values()];
+  const confirmDrawerRestock = async () => {
+    if (restockDrawer === null || restockSaving || editingRestockId !== null || !drawers.every(drawer => drawer.state === 'closed')) return;
+    setRestockSaving(true);
+    const drawer = restockDrawer;
+    try {
+      const hardware = await fetchHardwareStatus();
+      if (hardware?.drawer1_open !== false || hardware?.drawer2_open !== false || hardware.cabinet_close_required === true) {
+        setRestockError('Both reed switches must report closed. Check both drawers and the dispenser connection.');
+        return;
+      }
+      setRestockError('');
+      const columns = [...new Set(reminders.flatMap(reminder =>
+        (resolveBulkSchedule(reminder)?.slots ?? []).filter(slot => Math.floor(slot / 21) + 1 === drawer)
+          .map(slot => String.fromCharCode(65 + slot % 7))))];
+      const timestamp = await recordDrawerRestock(drawer, columns);
+      setRestockTimes(previous => ({ ...previous, [String(drawer)]: timestamp }));
+      setRestockVersion(previous => previous + 1);
+      await setSolenoidLock(drawer, false).catch(() => {});
+      await refresh();
+      setRestockDrawer(null);
+      setEditingRestockId(null);
+      showToast(`Drawer ${drawer} restocked. Saved cells are ready again.`);
+    } finally { setRestockSaving(false); }
+  };
   const [sheetParams, setSheetParams] = useState<SetScheduleParams | undefined>(undefined);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [solenoidOpen, setSolenoidOpen] = useState(false);
@@ -78,9 +151,9 @@ export default function HomeScreen() {
     } catch {
       showToast('⚠️ Solenoid command sent');
     }
-  }, [showToast]);
+  }, [showToast, setSolenoidOpen]);
 
-  const [tick, setTick] = useState(0);
+  const [, setTick] = useState(0);
 
   // Periodic 10-second tick to update countdown badges and missed states in real-time
   useEffect(() => {
@@ -124,17 +197,8 @@ export default function HomeScreen() {
     }
   };
 
-  const handleRefillColumn = useCallback(
-    async (drawer: number, column: string) => {
-      await recordColumnRefill(drawer, column);
-      await refresh();
-      showToast(`Drawer ${drawer} - Column ${column} refilled (7/7 doses)!`);
-    },
-    [refresh, showToast]
-  );
-
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       {/* Toast Notification Banner */}
       {toastMessage && (
         <Animated.View
@@ -173,6 +237,16 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
+        {missedDoseCount > 0 && (
+          <TouchableOpacity style={styles.missedReviewButton} onPress={openMissedReview} accessibilityRole="button">
+            <Ionicons name="alert-circle" size={20} color="#B42318" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.missedReviewTitle}>{missedDoseCount} missed dose{missedDoseCount === 1 ? '' : 's'} need review</Text>
+              <Text style={styles.missedReviewSubtitle}>Tap to open the missed-dose cards</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#B42318" />
+          </TouchableOpacity>
+        )}
         {/* ── Solenoid Lock Quick Control Switch ── */}
         <View style={styles.solenoidQuickCard}>
           <View style={styles.solenoidQuickLeft}>
@@ -224,11 +298,12 @@ export default function HomeScreen() {
 
         {/* ── Dispenser compartment view ── */}
         <DispenserView
+          key={restockVersion}
           reminders={reminders}
           doseHistory={doseHistory}
           onDeleteReminder={handleDelete}
           onOpenSetSchedule={handleOpenSheet}
-          onRefillColumn={handleRefillColumn}
+          onOpenRestock={openRestock}
         />
 
         {/* ── Divider ── */}
@@ -248,31 +323,11 @@ export default function HomeScreen() {
             <Text style={styles.emptySubtext}>
               Tap a drawer above to preview compartments,{'\n'}then add a time below.
             </Text>
-            <TouchableOpacity
-              style={styles.demoSeedBtn}
-              onPress={async () => {
-                await seedPhasedOut();
-                showToast('Inserted 0/7 doses demo into SQLite!');
-              }}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="flask-outline" size={15} color="#166534" style={{ marginRight: 6 }} />
-              <Text style={styles.demoSeedText}>Insert 0/7 Doses Demo (SQLite)</Text>
-            </TouchableOpacity>
           </View>
         ) : (
-          reminders.map((r) => {
-            const stock = calculateColumnStock(r, doseHistory);
-            return (
-              <ReminderCard
-                key={r.id}
-                reminder={r}
-                stockStatus={stock}
-                doseHistory={doseHistory}
-                onDelete={handleDelete}
-              />
-            );
-          })
+          reminders.map((r) => (
+            <ReminderCard key={r.id} reminder={r} doseHistory={doseHistory} onDelete={handleDelete} />
+          ))
         )}
       </ScrollView>
 
@@ -296,6 +351,64 @@ export default function HomeScreen() {
         </View>
       </View>
 
+      <Modal visible={restockDrawer !== null} transparent animationType="fade" onRequestClose={closeRestock}>
+        <View style={styles.restockOverlay}>
+          <View style={styles.restockCard}>
+            <View style={styles.restockTitleRow}>
+              <Text style={styles.restockTitle}>All of the medicine is taken. Add stock now.</Text>
+              <TouchableOpacity onPress={closeRestock} accessibilityLabel="Close restock modal"><Ionicons name="close" size={22} color="#374151" /></TouchableOpacity>
+            </View>
+            <Text style={styles.restockBody}>{restockUnlocked ? `Drawer ${restockDrawer} is unlocked. Pull it open and refill the saved compartments, then confirm below.` : `Unlocking Drawer ${restockDrawer}. If it stays locked, check the dispenser connection before refilling.`}</Text>
+            <View style={styles.restockGrid}>
+              {[1, 2, 3].map(row => (
+                <View key={row} style={styles.restockGridRow}>
+                  {'ABCDEFG'.split('').map(col => (
+                    <View key={`${col}${row}`} style={[styles.restockCell, restockItems.includes(`${col}${row}`) && styles.restockCellNeeded]}>
+                      <Text style={styles.restockCellText}>{col}{row}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </View>
+            <Text style={styles.restockSummaryTitle}>Medicine to replenish ({restockItems.length} saved cells)</Text>
+            <ScrollView style={styles.restockList}>
+              {reminders.filter(reminder => (resolveBulkSchedule(reminder)?.slots ?? [])
+                .some(slot => Math.floor(slot / 21) + 1 === restockDrawer)).map(reminder => {
+                const slots = (resolveBulkSchedule(reminder)?.slots ?? []).filter(slot => Math.floor(slot / 21) + 1 === restockDrawer);
+                const labels = slots.map(slot => `${String.fromCharCode(65 + slot % 7)}${Math.floor((slot % 21) / 7) + 1}`);
+                return <View key={reminder.id} style={styles.restockMedicineRow}>
+                  <Text style={styles.restockItem}>{labels.join(', ')} · {reminder.hour}:{String(reminder.minute).padStart(2, '0')} {reminder.amPm}</Text>
+                  {editingRestockId === reminder.id ? (
+                    <View style={styles.restockEditRow}>
+                      <TextInput style={styles.restockTimeInput} value={editHour} onChangeText={setEditHour} keyboardType="number-pad" maxLength={2} accessibilityLabel="Hour" />
+                      <Text>:</Text>
+                      <TextInput style={styles.restockTimeInput} value={editMinute} onChangeText={setEditMinute} keyboardType="number-pad" maxLength={2} accessibilityLabel="Minute" />
+                      <TouchableOpacity onPress={() => setEditAmPm(editAmPm === 'AM' ? 'PM' : 'AM')}><Text style={styles.restockEditButton}>{editAmPm}</Text></TouchableOpacity>
+                      <TouchableOpacity onPress={() => { void saveRestockTime(reminder); }} disabled={restockSaving}><Text style={styles.restockEditButton}>Save</Text></TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity onPress={() => { setEditingRestockId(reminder.id); setEditHour(String(reminder.hour)); setEditMinute(String(reminder.minute).padStart(2, '0')); setEditAmPm(reminder.amPm); }}>
+                      <Text style={styles.restockEditButton}>Edit time</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>;
+              })}
+            </ScrollView>
+            <Text style={styles.restockCloseNote}>
+              {drawers.every(drawer => drawer.state === 'closed')
+                ? 'Drawer closed and detected. You can confirm the refill.'
+                : 'Close both drawers fully to enable Okay.'}
+            </Text>
+            {restockError ? <Text style={styles.restockError}>{restockError}</Text> : null}
+            <TouchableOpacity style={[styles.restockButton, (restockSaving || !!editingRestockId || !restockDrawer || !drawers.every(drawer => drawer.state === 'closed')) && styles.restockButtonDisabled]}
+              onPress={() => { void confirmDrawerRestock(); }}
+              disabled={restockSaving || !!editingRestockId || !restockDrawer || !drawers.every(drawer => drawer.state === 'closed')}>
+              <Text style={styles.restockButtonText}>{restockSaving ? 'Refreshing…' : 'Okay — stock added'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Half-Screen Modal Bottom Sheet */}
       <SetScheduleBottomSheet
         visible={sheetVisible}
@@ -308,6 +421,35 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  restockOverlay: { flex: 1, justifyContent: 'center', padding: 24, backgroundColor: 'rgba(0,0,0,0.65)' },
+  restockCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 24 },
+  restockTitle: { fontSize: 22, fontWeight: '800', color: '#166534', marginBottom: 12 },
+  restockBody: { fontSize: 16, color: '#374151', lineHeight: 24, marginBottom: 20 },
+  restockTitleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  restockMedicineRow: { paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
+  restockEditRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 6 },
+  restockTimeInput: { borderWidth: 1, borderColor: '#9CA3AF', borderRadius: 6, width: 40, padding: 5, textAlign: 'center' },
+  restockEditButton: { color: '#166534', fontWeight: '700', padding: 5 },
+  restockGrid: { gap: 5, marginBottom: 14 },
+  restockGridRow: { flexDirection: 'row', gap: 5 },
+  restockCell: { flex: 1, height: 33, alignItems: 'center', justifyContent: 'center', backgroundColor: '#6B7280', borderRadius: 5 },
+  restockCellNeeded: { backgroundColor: '#F59E0B', borderWidth: 2, borderColor: '#92400E' },
+  restockCellText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
+  restockSummaryTitle: { fontSize: 14, fontWeight: '700', color: '#166534', marginBottom: 8 },
+  restockList: { maxHeight: 190, marginBottom: 14 },
+  restockItem: { color: '#374151', fontSize: 14, paddingVertical: 3 },
+  restockCloseNote: { color: '#92400E', fontSize: 13, marginBottom: 12 },
+  restockError: { color: '#B91C1C', fontSize: 13, marginBottom: 10 },
+  restockButtonDisabled: { backgroundColor: '#9CA3AF' },
+  restockButton: { backgroundColor: '#2E9E4B', padding: 14, borderRadius: 12, alignItems: 'center' },
+  restockButtonText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
+  missedReviewButton: {
+    backgroundColor: '#FFF0EB', borderColor: '#F1B8AC', borderWidth: 1,
+    borderRadius: 15, padding: 14, marginBottom: 16,
+    flexDirection: 'row', alignItems: 'center', gap: 11,
+  },
+  missedReviewTitle: { color: '#8F2B22', fontSize: 14, fontWeight: '800' },
+  missedReviewSubtitle: { color: '#A9685F', fontSize: 12, marginTop: 2 },
   safe: { flex: 1, backgroundColor: '#F5F0E8' },
   toastContainer: {
     position: 'absolute',
@@ -400,23 +542,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 18,
   },
-  demoSeedBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#DCFCE7',
-    borderWidth: 1,
-    borderColor: '#86EFAC',
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    marginTop: 18,
-  },
-  demoSeedText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#166534',
-  },
   solenoidQuickCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -507,7 +632,10 @@ const styles = StyleSheet.create({
   },
   bulkBtn: {
     flex: 1,
-    height: 48,
+    minHeight: 48,
+    minWidth: 0,
+    paddingVertical: 8,
+    paddingHorizontal: 7,
     borderRadius: 14,
     backgroundColor: '#EAF7EE',
     borderWidth: 1.5,
@@ -517,6 +645,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   bulkBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
     color: '#166534',
     fontSize: 13,
     fontWeight: '800',
@@ -524,7 +654,8 @@ const styles = StyleSheet.create({
   },
   addBtn: {
     flex: 1,
-    height: 48,
+    minHeight: 48,
+    height: undefined,
     borderRadius: 14,
   },
 });

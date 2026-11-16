@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
+  ScrollView,
   StyleSheet,
   TouchableOpacity,
   Modal,
@@ -9,8 +10,9 @@ import {
   Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Reminder, ColumnStockStatus, DoseEvent } from '../types/reminder';
-import { calculateDoseOccurrence } from '../services/medicationLogic';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Reminder, DoseEvent } from '../types/reminder';
+import { calculateDoseOccurrence, GRACE_PERIOD_SECONDS } from '../services/medicationLogic';
 
 interface Props {
   visible: boolean;
@@ -18,13 +20,9 @@ interface Props {
   col: string;         // 'A' - 'G'
   row: string;         // '1' - '3'
   reminder?: Reminder;
-  stockStatus?: ColumnStockStatus;
   doseHistory?: DoseEvent[];
   onClose: () => void;
-  onDispense: (reminder: Reminder) => void;
-  onChangeTime: (reminder: Reminder) => void;
   onDelete: (id: string) => void;
-  onRefill?: (drawer: number, column: string) => void;
 }
 
 export default function CompartmentDetailModal({
@@ -33,14 +31,11 @@ export default function CompartmentDetailModal({
   col,
   row,
   reminder,
-  stockStatus,
   doseHistory = [],
   onClose,
-  onDispense,
-  onChangeTime,
   onDelete,
-  onRefill,
 }: Props) {
+  const [nowEpoch] = useState(() => Date.now());
   const [animFade] = useState(() => new Animated.Value(0));
   const [animScale] = useState(() => new Animated.Value(0.92));
   const [animTranslateY] = useState(() => new Animated.Value(20));
@@ -73,6 +68,8 @@ export default function CompartmentDetailModal({
     }
   }, [visible, animFade, animScale, animTranslateY]);
 
+  const insets = useSafeAreaInsets();
+
   if (!visible || !reminder) return null;
 
   const timeFormatted = reminder.second !== undefined && reminder.second > 0
@@ -81,15 +78,8 @@ export default function CompartmentDetailModal({
   const isDaily = !reminder.date || reminder.recurrence === 'every-day';
   const recurrenceText = isDaily ? 'Every day' : `One-time on ${reminder.date}`;
 
-  // Stock calculations
-  const remaining = stockStatus?.remainingDoses ?? 7;
-  const total = stockStatus?.cycleDays ?? 7;
-  const pct = Math.max(0, Math.min(100, Math.round((remaining / total) * 100)));
-  const isOut = stockStatus?.isOutOfStock ?? false;
-  const isLow = stockStatus?.isLowStock ?? false;
-
   // Dose Occurrence status for today
-  const occurrence = reminder ? calculateDoseOccurrence(reminder, Date.now(), doseHistory) : undefined;
+  const occurrence = reminder ? calculateDoseOccurrence(reminder, nowEpoch, doseHistory) : undefined;
   const isDoseMissed = occurrence?.state === 'MISSED';
   const isDoseAlerting = occurrence?.state === 'ALERTING';
   const isDoseTaken = occurrence?.state === 'TAKEN' || occurrence?.state === 'TAKEN_MANUAL';
@@ -102,9 +92,10 @@ export default function CompartmentDetailModal({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <View style={styles.scrim}>
+      <View style={[styles.scrim, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 12 }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
 
+        <ScrollView style={{ width: '100%', maxWidth: 380 }} contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }} showsVerticalScrollIndicator={false}>
         <Animated.View
           style={[
             styles.card,
@@ -118,7 +109,7 @@ export default function CompartmentDetailModal({
           <View style={styles.header}>
             <View style={styles.headerLeft}>
               <View style={styles.slotBadge}>
-                <View style={[styles.ledDot, isDoseMissed && { backgroundColor: '#DC2626' }]} />
+                <View style={[styles.ledDot, isDoseTaken && { backgroundColor: '#F97316' }, isDoseMissed && { backgroundColor: '#DC2626' }]} />
                 <Text style={styles.slotBadgeText}>
                   Drawer {drawerIndex + 1} • {col}{row}
                 </Text>
@@ -193,7 +184,9 @@ export default function CompartmentDetailModal({
               <View style={{ flex: 1 }}>
                 <Text style={styles.missedNoticeTitle}>⚠️ Dosage Missed</Text>
                 <Text style={styles.missedNoticeDesc}>
-                  20 minutes have passed since {timeFormatted} without intake confirmation.
+                  {occurrence && occurrence.elapsedSeconds < GRACE_PERIOD_SECONDS
+                    ? `The ${timeFormatted} dose was not confirmed before the next alarm.`
+                    : `5 minutes have passed since ${timeFormatted} without intake confirmation.`}
                 </Text>
               </View>
             </View>
@@ -213,7 +206,7 @@ export default function CompartmentDetailModal({
             <View style={styles.takenNoticeBox}>
               <Ionicons name="checkmark-circle" size={20} color="#15803D" style={{ marginRight: 8 }} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.takenNoticeTitle}>✓ Today's Dose Completed</Text>
+                <Text style={styles.takenNoticeTitle}>✓ Dose Completed Today</Text>
                 <Text style={styles.takenNoticeDesc}>
                   Medicine intake was recorded successfully.
                 </Text>
@@ -221,95 +214,8 @@ export default function CompartmentDetailModal({
             </View>
           )}
 
-          {/* Stock & Inventory Card */}
-          <View style={styles.stockCard}>
-            <View style={styles.stockHeader}>
-              <View style={styles.stockTitleWrap}>
-                <Ionicons name="medkit-outline" size={15} color="#374151" style={{ marginRight: 5 }} />
-                <Text style={styles.stockTitle}>Column {col} Medicine Stock</Text>
-              </View>
-
-              <View
-                style={[
-                  styles.stockBadge,
-                  isOut ? styles.badgeOut : isLow ? styles.badgeLow : styles.badgeOk,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.stockBadgeText,
-                    isOut ? styles.textOut : isLow ? styles.textLow : styles.textOk,
-                  ]}
-                >
-                  {isOut ? 'Out of Stock' : isLow ? 'Low Stock' : 'In Stock'}
-                </Text>
-              </View>
-            </View>
-
-            {/* Visual Pill Progress Bar */}
-            <View style={styles.progressTrack}>
-              <View
-                style={[
-                  styles.progressBar,
-                  { width: `${pct}%` },
-                  isOut ? styles.barOut : isLow ? styles.barLow : styles.barOk,
-                ]}
-              />
-            </View>
-
-            <View style={styles.stockSubRow}>
-              <Text style={styles.stockCountText}>
-                <Text style={styles.boldNum}>{remaining}</Text> of {total} doses remaining
-              </Text>
-              {stockStatus?.nextRestockDate ? (
-                <Text style={styles.stockDateText}>
-                  Refill by: {stockStatus.nextRestockDate}
-                </Text>
-              ) : null}
-            </View>
-
-            {/* Quick Refill Button if Low or Empty */}
-            {(isLow || isOut) && onRefill && (
-              <TouchableOpacity
-                style={styles.refillBtn}
-                onPress={() => onRefill(drawerIndex + 1, col)}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="refresh" size={13} color="#15803D" style={{ marginRight: 5 }} />
-                <Text style={styles.refillBtnText}>Mark Column {col} as Refilled (7/7)</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Primary Action: Dispense Now */}
-          <TouchableOpacity
-            style={styles.dispensePrimaryBtn}
-            onPress={() => {
-              onClose();
-              onDispense(reminder);
-            }}
-            activeOpacity={0.85}
-          >
-            <View style={styles.flashIconBg}>
-              <Ionicons name="flash" size={16} color="#FFFFFF" />
-            </View>
-            <Text style={styles.dispenseBtnText}>DISPENSE NOW</Text>
-          </TouchableOpacity>
-
-          {/* Secondary Actions: Change Time & Delete */}
+          {/* Saved cells can only be removed. */}
           <View style={styles.actionRow}>
-            <TouchableOpacity
-              style={styles.editBtn}
-              onPress={() => {
-                onClose();
-                onChangeTime(reminder);
-              }}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="create-outline" size={16} color="#166534" style={{ marginRight: 6 }} />
-              <Text style={styles.editBtnText}>Change Time</Text>
-            </TouchableOpacity>
-
             <TouchableOpacity
               style={styles.deleteBtn}
               onPress={() => {
@@ -323,6 +229,7 @@ export default function CompartmentDetailModal({
             </TouchableOpacity>
           </View>
         </Animated.View>
+        </ScrollView>
       </View>
     </Modal>
   );
@@ -596,6 +503,8 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   refillBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
     fontSize: 11,
     fontWeight: '700',
     color: '#15803D',
@@ -624,6 +533,8 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   dispenseBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800',
@@ -646,6 +557,8 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   editBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
     fontSize: 13,
     fontWeight: '700',
     color: '#166534',
@@ -662,6 +575,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   deleteBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
     fontSize: 13,
     fontWeight: '700',
     color: '#DC2626',

@@ -7,15 +7,22 @@ import {
   Modal,
   Animated,
   Switch,
+  ScrollView,
   Platform,
   Vibration,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Reminder } from '../types/reminder';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { DoseEvent, Reminder } from '../types/reminder';
 import { setSolenoidLock } from '../services/hardware';
-import { computeTargetTriggerEpoch } from '../services/medicationLogic';
+import { calculateDoseOccurrence, GRACE_PERIOD_SECONDS } from '../services/medicationLogic';
 
 interface Props {
+  drawerStatus?: React.ReactNode;
+  pendingReminders?: Reminder[];
+  missedDoseEvents?: DoseEvent[];
+  onAcknowledgeMissed?: (event: DoseEvent) => void;
+  onSelectReminder?: (id: string) => void;
   visible: boolean;
   reminder: Reminder | null;
   onConfirmDose: (reminder: Reminder) => void;
@@ -23,15 +30,62 @@ interface Props {
   onDismiss: () => void;
 }
 
-const TOTAL_GRACE_PERIOD_SEC = 1200; // 20 minutes grace period per spec
+const TOTAL_GRACE_PERIOD_SEC = GRACE_PERIOD_SECONDS;
+
+function MissedDoseStack({ events, onAcknowledge }: {
+  events: DoseEvent[];
+  onAcknowledge?: (event: DoseEvent) => void;
+}) {
+  if (!events.length) return null;
+  const ordered = [...events].sort((a, b) => b.targetTriggerEpoch - a.targetTriggerEpoch);
+  return (
+    <View style={styles.missedStack}>
+      <View style={styles.missedStackHeading}>
+        <View style={styles.missedStackIcon}><Ionicons name="alert-circle" size={20} color="#B42318" /></View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.missedStackEyebrow}>NEEDS YOUR ATTENTION</Text>
+          <Text style={styles.missedStackTitle}>Missed doses</Text>
+        </View>
+        <View style={styles.missedCount}><Text style={styles.missedCountText}>{events.length}</Text></View>
+      </View>
+      {ordered.map((event, index) => (
+        <View key={missedDoseKey(event)} style={[styles.missedDoseCard, index > 0 && styles.missedDoseCardFollowing]}>
+          <View style={styles.missedDoseTop}>
+            <View>
+              <Text style={styles.missedDoseTime}>{event.scheduledTimeFormatted}</Text>
+              <Text style={styles.missedDoseDate}>{event.triggerDate}</Text>
+            </View>
+            <View style={styles.missedStatus}><Text style={styles.missedStatusText}>MISSED</Text></View>
+          </View>
+          <Text style={styles.missedDoseCompartment}>{event.compartment || 'Scheduled medicine'}</Text>
+          <Text style={styles.missedDoseDetail}>This dose was not confirmed before the next alarm or its five-minute cutoff.</Text>
+          <TouchableOpacity accessibilityRole="button" onPress={() => onAcknowledge?.(event)} style={styles.missedAcknowledge}>
+            <Text style={styles.missedAcknowledgeText}>Acknowledge</Text>
+            <Ionicons name="arrow-forward" size={16} color="#9F2D24" />
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function missedDoseKey(event: DoseEvent): string {
+  return `${event.scheduleId}:${event.triggerDate}`;
+}
 
 export default function MedicationAlertModal({
+  drawerStatus,
+  pendingReminders = [],
+  missedDoseEvents = [],
+  onAcknowledgeMissed,
+  onSelectReminder,
   visible,
   reminder,
   onConfirmDose,
   onMissedDose,
   onDismiss,
 }: Props) {
+  const insets = useSafeAreaInsets();
   // Animation values
   const flashAnim = useRef(new Animated.Value(0)).current;
   const pulseScale = useRef(new Animated.Value(1)).current;
@@ -44,7 +98,7 @@ export default function MedicationAlertModal({
   const [solenoidOpen, setSolenoidOpen] = useState(true);
   const [solenoidLoading, setSolenoidLoading] = useState(false);
 
-  // Missed dose state & Countdown timer (20 minutes)
+  // Missed dose state & countdown timer (5 minutes)
   const [isMissed, setIsMissed] = useState(false);
   const [remainingSec, setRemainingSec] = useState(TOTAL_GRACE_PERIOD_SEC);
 
@@ -67,10 +121,10 @@ export default function MedicationAlertModal({
 
     if (visible && reminder) {
       // Calculate remaining grace period
-      const triggerEpochMs = computeTargetTriggerEpoch(reminder, new Date());
+      const triggerEpochMs = calculateDoseOccurrence(reminder).targetTriggerEpochMs;
       const diffMs = Date.now() - triggerEpochMs;
       const initialRemaining = Math.max(0, Math.floor((TOTAL_GRACE_PERIOD_SEC * 1000 - diffMs) / 1000));
-      const alreadyMissed = diffMs > TOTAL_GRACE_PERIOD_SEC * 1000;
+      const alreadyMissed = diffMs >= TOTAL_GRACE_PERIOD_SEC * 1000;
 
       if (alreadyMissed || initialRemaining <= 0) {
         setIsMissed(true);
@@ -167,20 +221,17 @@ export default function MedicationAlertModal({
       );
       beaconLoop.start();
 
-      // Grace period 20-min countdown timer
+      // Five-minute countdown timer
       if (!alreadyMissed && initialRemaining > 0) {
         timer = setInterval(() => {
-          setRemainingSec((prev) => {
-            if (prev <= 1) {
-              if (timer) clearInterval(timer);
-              setIsMissed(true);
-              setSolenoidOpen(false);
-              setSolenoidLock(drawerNum, false).catch(() => {});
-              onMissedDose?.(reminder);
-              return 0;
-            }
-            return prev - 1;
-          });
+          const remaining = Math.max(0, Math.ceil((triggerEpochMs + TOTAL_GRACE_PERIOD_SEC * 1000 - Date.now()) / 1000));
+          setRemainingSec(remaining);
+          if (remaining === 0) {
+            if (timer) clearInterval(timer);
+            setIsMissed(true);
+            setSolenoidOpen(false);
+            onMissedDose?.(reminder);
+          }
         }, 1000);
       }
     } else {
@@ -207,7 +258,27 @@ export default function MedicationAlertModal({
     setSolenoidLoading(false);
   };
 
-  if (!visible || !reminder) return null;
+  if (!visible) return null;
+  if (!reminder) {
+    return (
+      <Modal visible transparent animationType="fade" onRequestClose={onDismiss} statusBarTranslucent>
+        <View style={[styles.scrim, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 12 }]}>
+          <ScrollView style={styles.standaloneScroll} contentContainerStyle={styles.standaloneContent}>
+            <View style={styles.standaloneSheet}>
+              <TouchableOpacity accessibilityRole="button" accessibilityLabel="Close missed dose review" onPress={onDismiss} style={styles.standaloneClose}>
+                <Ionicons name="close" size={20} color="#62746A" />
+              </TouchableOpacity>
+              <Text style={styles.standaloneEyebrow}>MEDICATION REVIEW</Text>
+              <Text style={styles.standaloneTitle}>A dose still needs your attention</Text>
+              <Text style={styles.standaloneSubtitle}>Review the missed doses below. They stay here until you acknowledge them.</Text>
+              {drawerStatus}
+              <MissedDoseStack events={missedDoseEvents} onAcknowledge={onAcknowledgeMissed} />
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+    );
+  }
 
   // Interpolated flashing border and banner colors
   const borderFlashColor = flashAnim.interpolate({
@@ -238,7 +309,7 @@ export default function MedicationAlertModal({
       onRequestClose={onDismiss}
       statusBarTranslucent
     >
-      <View style={styles.scrim}>
+      <View style={[styles.scrim, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 12 }]}>
         <Animated.View
           style={[
             styles.modalWrapper,
@@ -248,6 +319,7 @@ export default function MedicationAlertModal({
             },
           ]}
         >
+          <ScrollView style={{ width: '100%' }} contentContainerStyle={{ paddingVertical: 8 }}>
           <Animated.View
             style={[
               styles.modalCard,
@@ -256,6 +328,21 @@ export default function MedicationAlertModal({
               },
             ]}
           >
+            {drawerStatus}
+            <MissedDoseStack events={missedDoseEvents} onAcknowledge={onAcknowledgeMissed} />
+            {pendingReminders.length > 1 && <View style={{ padding: 10 }}>
+              <Text style={{ fontWeight: '700' }}>{pendingReminders.length} medicines pending — select a dose</Text>
+              <ScrollView horizontal style={{ maxHeight: 48 }}>
+                {pendingReminders.map((item) => <TouchableOpacity key={item.id} onPress={() => onSelectReminder?.(item.id)} accessibilityRole="button" accessibilityState={{ selected: item.id === reminder.id }} style={{ padding: 10, backgroundColor: item.id === reminder.id ? '#FED7AA' : '#F3F4F6', marginRight: 6, borderRadius: 8 }}>
+                  <Text>{item.compartment || 'Medicine'}</Text>
+                </TouchableOpacity>)}
+              </ScrollView>
+            </View>}
+            <View style={styles.currentDoseHeading}>
+              <View style={styles.currentDoseDot} />
+              <Text style={styles.currentDoseLabel}>CURRENT DOSE</Text>
+              <Text style={styles.currentDoseTime}>{timeFormatted}</Text>
+            </View>
             {/* Top Banner (Flashing when alerting, Solid red when missed) */}
             <Animated.View
               style={[
@@ -280,7 +367,7 @@ export default function MedicationAlertModal({
                 ]}
               >
                 {isMissed
-                  ? '⚠️ 20 MINS PASSED — DOSAGE IS MISSED'
+                  ? '⚠️ 5 MINS PASSED — DOSAGE IS MISSED'
                   : '⏰ TIME TO TAKE YOUR MEDICINE!'}
               </Animated.Text>
               <View
@@ -326,7 +413,7 @@ export default function MedicationAlertModal({
           </Text>
           <Text style={styles.subheadline}>
             {isMissed
-              ? '20 minutes have passed without intake. This scheduled dosage has been marked as missed.'
+              ? '5 minutes have passed without intake. This scheduled dosage has been marked as missed.'
               : 'Please take your dose from the unlocked dispenser compartment.'}
           </Text>
 
@@ -422,7 +509,7 @@ export default function MedicationAlertModal({
             />
           </View>
 
-          {/* 20-Minute Countdown Bar */}
+          {/* Five-minute countdown bar */}
           <View style={styles.countdownSection}>
             <View style={styles.countdownRow}>
               <Text style={styles.countdownLabel}>Dispenser Grace Period:</Text>
@@ -445,7 +532,7 @@ export default function MedicationAlertModal({
                     width: isMissed ? '100%' : `${progressPct}%`,
                     backgroundColor: isMissed
                       ? '#DC2626'
-                      : remainingSec < 300
+                      : remainingSec < 60
                       ? '#EF4444'
                       : '#10B981',
                   },
@@ -497,12 +584,13 @@ export default function MedicationAlertModal({
                   activeOpacity={0.7}
                 >
                   <Ionicons name="alarm-outline" size={17} color="#6B7280" style={{ marginRight: 6 }} />
-                  <Text style={styles.dismissBtnText}>Snooze / Remind Later</Text>
+                  <Text style={styles.dismissBtnText}>Dismiss this alert</Text>
                 </TouchableOpacity>
               </>
             )}
           </View>
         </Animated.View>
+          </ScrollView>
         </Animated.View>
       </View>
     </Modal>
@@ -517,9 +605,63 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
   },
+  standaloneScroll: { width: '100%', maxWidth: 430 },
+  standaloneContent: { flexGrow: 1, justifyContent: 'center', paddingVertical: 12 },
+  standaloneSheet: {
+    backgroundColor: '#F8FAF9', borderRadius: 28, padding: 22,
+    shadowColor: '#071713', shadowOpacity: 0.25, shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 }, elevation: 18,
+  },
+  standaloneClose: {
+    alignSelf: 'flex-end', width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#E8EEEA', alignItems: 'center', justifyContent: 'center',
+  },
+  standaloneEyebrow: { color: '#3B7460', fontSize: 11, fontWeight: '800', letterSpacing: 1.5 },
+  standaloneTitle: { color: '#17251E', fontSize: 26, fontWeight: '800', marginTop: 8, lineHeight: 31 },
+  standaloneSubtitle: { color: '#66756D', fontSize: 14, lineHeight: 20, marginTop: 8, marginBottom: 14 },
+  missedStack: { width: '100%', marginBottom: 18 },
+  missedStackHeading: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+  missedStackIcon: {
+    width: 38, height: 38, borderRadius: 12, backgroundColor: '#FFE5E0',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  missedStackEyebrow: { color: '#B42318', fontSize: 10, fontWeight: '800', letterSpacing: 1.2 },
+  missedStackTitle: { color: '#342320', fontSize: 19, fontWeight: '800', marginTop: 2 },
+  missedCount: {
+    minWidth: 30, height: 30, paddingHorizontal: 8, borderRadius: 15,
+    backgroundColor: '#B42318', alignItems: 'center', justifyContent: 'center',
+  },
+  missedCountText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
+  missedDoseCard: {
+    backgroundColor: '#FFF6F3', borderColor: '#F0B8AE', borderWidth: 1,
+    borderLeftWidth: 5, borderLeftColor: '#CF493D', borderRadius: 17,
+    padding: 15, shadowColor: '#9F2D24', shadowOpacity: 0.1,
+    shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 3,
+  },
+  missedDoseCardFollowing: { marginTop: 10 },
+  missedDoseTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  missedDoseTime: { color: '#482D28', fontSize: 21, fontWeight: '900' },
+  missedDoseDate: { color: '#9B736C', fontSize: 11, fontWeight: '700', marginTop: 2 },
+  missedStatus: { backgroundColor: '#FFE0D8', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8 },
+  missedStatusText: { color: '#A93228', fontSize: 10, fontWeight: '900', letterSpacing: 0.8 },
+  missedDoseCompartment: { color: '#663B34', fontSize: 15, fontWeight: '700', marginTop: 5 },
+  missedDoseDetail: { color: '#8D6A63', fontSize: 12, lineHeight: 17, marginTop: 6 },
+  missedAcknowledge: {
+    borderTopWidth: 1, borderTopColor: '#F2D5CF', marginTop: 12, paddingTop: 11,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+  },
+  missedAcknowledgeText: { color: '#9F2D24', fontSize: 13, fontWeight: '800' },
+  currentDoseHeading: {
+    width: '100%', flexDirection: 'row', alignItems: 'center',
+    marginBottom: 14, gap: 7,
+  },
+  currentDoseDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#1B8E60' },
+  currentDoseLabel: { color: '#287558', fontSize: 11, fontWeight: '900', letterSpacing: 1.2, flex: 1 },
+  currentDoseTime: { color: '#285C47', fontSize: 13, fontWeight: '800' },
   modalWrapper: {
     width: '100%',
     maxWidth: 400,
+    maxHeight: '100%',
     alignItems: 'center',
   },
   modalCard: {
@@ -764,6 +906,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   confirmBtn: {
+    minHeight: 52,
+    paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -777,6 +921,9 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   confirmBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
+    lineHeight: 20,
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800',
@@ -791,6 +938,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   dismissBtnText: {
+    flexShrink: 1,
+    textAlign: 'center',
+    lineHeight: 20,
     color: '#475569',
     fontSize: 13,
     fontWeight: '700',
