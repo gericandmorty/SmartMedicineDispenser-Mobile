@@ -287,10 +287,10 @@ medicine restores scheduled notifications and clears Arduino's missed latch.
 
 When every saved cell in a drawer is taken, those cells turn gray and its header reads `0/21 · Add Medicine`. Unused slots do not block restocking.
 An **Add Medicine** button appears beside that drawer. Tapping it opens the
-restock modal, sounds the Arduino buzzer, and requests that drawer's solenoid unlock. The drawer must be
+restock modal, stops the all-meds-taken buzzer, and unlocks the selected drawer for a quiet refill. The drawer must be
 pulled open by hand. The restock modal highlights saved cells needing medicine and lists their saved times. Each listed schedule can have its time edited in the modal.
 After physically refilling the saved compartments and closing both drawers so
 the reed switches confirm closure, tap “Okay — stock added.” The app records a drawer refill time, relocks the solenoid,
 and refreshes the saved cells to green. The refill
 time also handles a last dose and refill on the same day. The app needs a live
-hardware connection for the buzzer and unlock actions.
+hardware connection to unlock the drawer.

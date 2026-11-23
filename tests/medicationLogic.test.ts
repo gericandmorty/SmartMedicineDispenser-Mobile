@@ -4,6 +4,7 @@ import {
   resolveBulkSchedule,
   matchesSchedulePicker,
   hardwareEventMatchesOccurrence,
+  findHardwareDoseEvent,
   hardwareConfirmsActiveOccurrence,
   shouldPresentDoseAlert,
   to24Hour,
@@ -803,6 +804,19 @@ describe('Foreground reconciliation and bulk picker', () => {
     assert.equal(hardwareEventMatchesOccurrence(reminder, event, trigger + 60000), true);
     assert.equal(hardwareEventMatchesOccurrence(reminder, {...event, triggerDate: '2026-11-03'}, trigger + 60000), false);
     assert.equal(hardwareEventMatchesOccurrence(reminder, {...event, targetTriggerEpoch: trigger/1000-60}, trigger + 60000), false);
+  });
+  it('applies the newest missed result to recurring and one-time, single and bulk doses', () => {
+    for (const recurrence of ['every-day', 'once'] as const) {
+      for (const bulkSlots of [[0], [0, 7, 14]]) {
+        const dose = { ...reminder, recurrence, date: recurrence === 'once' ? reminder.date : undefined, bulkSlots };
+        const missed = { ...event, resolution: 'MISSED' as const, elapsedSeconds: 300 };
+        const events = [missed, event];
+        const now = trigger + 300000;
+        assert.equal(findHardwareDoseEvent(dose, events, now), missed);
+        const updated = reconcileHardwareEvents([event], events);
+        assert.equal(calculateDoseOccurrence(dose, now, updated).state, 'MISSED');
+      }
+    }
   });
   it('matches grouped hardware events by complete drawer slots, never another drawer', () => {
     const grouped = {...event, scheduleId: 'other', compartment: 'Drawer 1 (A1, A2, A3); Drawer 2 (B1, B2, B3)'};

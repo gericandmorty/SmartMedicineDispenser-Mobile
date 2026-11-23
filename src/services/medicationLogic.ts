@@ -269,19 +269,10 @@ export function reconcileHardwareEvents(
     map.set(key, event);
   }
 
-  // Overlay hardware events
-  for (const hwEvent of hardwareEvents) {
+  // Apply the oldest device report first so the latest correction wins.
+  for (const hwEvent of [...hardwareEvents].reverse()) {
     const key = `${hwEvent.scheduleId}_${hwEvent.triggerDate}`;
-    const local = map.get(key);
-
-    if (!local) {
-      map.set(key, hwEvent);
-    } else {
-      // If local is pending or missed, but hardware confirmed taken:
-      if (hwEvent.resolution === 'TAKEN') {
-        map.set(key, { ...local, ...hwEvent, resolution: 'TAKEN' });
-      }
-    }
+    if (map.get(key)?.resolution !== 'TAKEN_MANUAL') map.set(key, hwEvent);
   }
 
   return Array.from(map.values()).sort(
@@ -438,6 +429,11 @@ export function hardwareEventMatchesOccurrence(reminder: Reminder, event: DoseEv
   return !!target && target.slots.every((slot) => eventSlots.includes(slot));
 }
 
+/** The controller returns newest first, including corrections for the same occurrence. */
+export function findHardwareDoseEvent(reminder: Reminder, events: DoseEvent[], now = Date.now()): DoseEvent | undefined {
+  return events.find((event) => hardwareEventMatchesOccurrence(reminder, event, now));
+}
+
 /** A missing pickup event is not proof that a dose is still waiting. */
 export function hardwareConfirmsActiveOccurrence(reminder: Reminder, status: HardwareStatus | null, now = Date.now()): boolean {
   const alert = status?.active_alert;
@@ -492,15 +488,10 @@ export function drawerNeedsRestock(
 ): boolean {
   const inDrawer = reminders.filter(reminder => resolveBulkSchedule(reminder)?.slots.some(slot =>
     Math.floor(slot / 21) + 1 === drawer));
-  const savedSlots = new Set(inDrawer.flatMap(reminder =>
-    (resolveBulkSchedule(reminder)?.slots ?? []).filter(slot => Math.floor(slot / 21) + 1 === drawer)));
-  // Every scheduled cell in this drawer must be taken; unused slots need no stock.
-  if (savedSlots.size === 0) return false;
-  if (!inDrawer.every(reminder => {
-    const state = calculateDoseOccurrence(reminder, now, history).state;
-    return state === 'TAKEN' || state === 'TAKEN_MANUAL';
-  })) return false;
-  return history.some(event => inDrawer.some(reminder => reminder.id === event.scheduleId) &&
-    (event.resolution === 'TAKEN' || event.resolution === 'TAKEN_MANUAL') &&
-    (event.resolvedAtEpoch ?? event.targetTriggerEpoch) * 1000 > restockedAt);
+  const takenSinceRefill = new Set(history.filter(event => {
+    const takenAt = (event.resolvedAtEpoch ?? event.targetTriggerEpoch) * 1000;
+    return (event.resolution === 'TAKEN' || event.resolution === 'TAKEN_MANUAL') &&
+      takenAt > restockedAt && takenAt <= now;
+  }).map(event => event.scheduleId));
+  return inDrawer.length > 0 && inDrawer.every(reminder => takenSinceRefill.has(reminder.id));
 }

@@ -17,7 +17,8 @@ export function updateDrawer(previous: DrawerReading, state: DoorState, now: num
 
 // Once shown, only fresh, explicit confirmation from BOTH reeds clears the warning.
 export function requiresCabinetClosure(previous: boolean, payload: unknown): boolean {
+  if (payload && typeof payload === 'object' &&
+      (payload as Record<string, unknown>).cabinet_close_required === true) return true;
   if (readDrawerState(payload, 1) === 'closed' && readDrawerState(payload, 2) === 'closed') return false;
-  return previous || (!!payload && typeof payload === 'object' &&
-    (payload as Record<string, unknown>).cabinet_close_required === true);
+  return previous;
 }

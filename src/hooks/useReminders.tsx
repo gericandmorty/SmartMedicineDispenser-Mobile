@@ -13,6 +13,7 @@ import React, {
 import { Reminder, DoseEvent, DoseResolution } from '../types/reminder';
 import {
   loadReminders,
+  loadDrawerRestockTimes,
   addReminder,
   deleteReminder,
   markReminderSyncStatus,
@@ -27,11 +28,12 @@ import {
   GRACE_PERIOD_MS,
   resolveBulkSchedule,
   validateScheduleConflict,
-  hardwareEventMatchesOccurrence,
+  findHardwareDoseEvent,
   shouldPresentDoseAlert,
   isDoseSuperseded,
   selectVisibleMissedDoses,
   completedDrawer,
+  drawerNeedsRestock,
   formatDateLocal,
 } from '../services/medicationLogic';
 import {
@@ -42,6 +44,7 @@ import {
   suspendScheduledMedicineNotifications,
   triggerImmediateMissedNotification,
   triggerDrawerCompleteNotification,
+  notifyEmptyDrawer,
 } from '../services/notifications';
 import {
   syncScheduleToESP32,
@@ -78,6 +81,7 @@ function sortReminders(data: Reminder[]): Reminder[] {
 
 export interface RemindersContextType {
   drawers: ReturnType<typeof useDrawerStatus>;
+  restockTimes: Record<string, number>;
   reminders: Reminder[];
   doseHistory: DoseEvent[];
   missedDoseCount: number;
@@ -117,6 +121,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
   const [doseHistory, setDoseHistory] = useState<DoseEvent[]>([]);
   const [acknowledgedMissedKeys, setAcknowledgedMissedKeys] = useState<string[]>([]);
   const acknowledgedMissedRef = useRef<string[]>([]);
+  const [restockTimes, setRestockTimes] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
   // Active Alert Modal State
@@ -132,8 +137,8 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
   const [alertModalVisible, setAlertModalVisible] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [remData, histData, savedAcknowledgements] = await Promise.all([
-      loadReminders(), loadDoseHistory(), AsyncStorage.getItem(MISSED_ACK_STORAGE_KEY),
+    const [remData, histData, savedAcknowledgements, refillTimes] = await Promise.all([
+      loadReminders(), loadDoseHistory(), AsyncStorage.getItem(MISSED_ACK_STORAGE_KEY), loadDrawerRestockTimes(),
     ]);
 
     const sorted = sortReminders(remData);
@@ -142,6 +147,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
     startTransition(() => {
       setReminders(sorted);
       setDoseHistory(histData);
+      setRestockTimes(refillTimes);
       setAcknowledgedMissedKeys(parsedAcknowledgements);
       setLoading(false);
     });
@@ -196,17 +202,35 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
   }, [reminders, doseHistory]);
   const foregroundGeneration = useRef(0);
   const presentedOccurrences = useRef(new Set<string>());
+  const checkingEmptyDrawers = useRef(new Set<string>());
   const completedDrawersNotified = useRef(new Set<string>());
   useEffect(() => {
     if (!foreground || loading) return;
     const date = formatDateLocal(new Date());
     for (const drawer of [1, 2] as const) {
       const key = `${date}:${drawer}`;
+      const refill = restockTimes[String(drawer)] ?? 0;
+      if (drawerNeedsRestock(reminders, doseHistory, drawer, refill)) {
+        const storageKey = `drawer-empty-notified-${drawer}`;
+        const cycle = String(refill);
+        const pendingKey = `${drawer}:${cycle}`;
+        if (!checkingEmptyDrawers.current.has(pendingKey)) {
+          checkingEmptyDrawers.current.add(pendingKey);
+          void (async () => {
+            if (await AsyncStorage.getItem(storageKey) !== cycle && await notifyEmptyDrawer(drawer)) {
+              await AsyncStorage.setItem(storageKey, cycle);
+            }
+          })().catch(error => console.warn('[Restock] Notification failed', error))
+            .finally(() => checkingEmptyDrawers.current.delete(pendingKey));
+        }
+        completedDrawersNotified.current.add(key);
+        continue;
+      }
       if (completedDrawersNotified.current.has(key) || !completedDrawer(reminders, doseHistory, drawer)) continue;
       completedDrawersNotified.current.add(key);
       void triggerDrawerCompleteNotification(drawer).catch(() => {});
     }
-  }, [foreground, loading, reminders, doseHistory]);
+  }, [foreground, loading, reminders, doseHistory, restockTimes]);
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
       foregroundGeneration.current += 1;
@@ -271,9 +295,10 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
         for (const reminder of stored) {
           if (stale()) return;
           const occurrence = calculateDoseOccurrence(reminder, Date.now(), history);
-          if (occurrence.state !== 'ALERTING' && occurrence.state !== 'MISSED') continue;
-          const hardware = hardwareEvents.find((event) => event.resolution === 'TAKEN' && hardwareEventMatchesOccurrence(reminder, event))
-            ?? hardwareEvents.find((event) => event.resolution === 'MISSED' && hardwareEventMatchesOccurrence(reminder, event));
+          if (occurrence.state === 'UPCOMING' || occurrence.state === 'TAKEN_MANUAL') continue;
+          // The controller returns newest first. Its latest result can correct local history.
+          const hardware = findHardwareDoseEvent(reminder, hardwareEvents);
+          if (!hardware && occurrence.state === 'TAKEN') continue;
           if (stale()) return;
           const key = `${reminder.id}:${occurrence.triggerDate}`;
           const existing = history.find((event) => event.scheduleId === reminder.id && event.triggerDate === occurrence.triggerDate);
@@ -290,7 +315,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
             if (hardware.resolution === 'MISSED') {
               setMissedModalDismissed(false);
               void suspendScheduledMedicineNotifications(stored).catch(() => {});
-            triggerImmediateMissedNotification(reminder.compartment || 'Dispenser').catch(() => {});
+              triggerImmediateMissedNotification(reminder.compartment || 'Dispenser').catch(() => {});
             }
           } else if (isDoseSuperseded(reminder, stored, Date.now()) && !history.some((event) =>
             event.scheduleId === reminder.id && event.triggerDate === occurrence.triggerDate)) {
@@ -415,7 +440,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
     setAlertQueue([]);
     setMissedModalDismissed(true);
     await clearAllMedicineData();
-    await AsyncStorage.removeItem(MISSED_ACK_STORAGE_KEY).catch(() => {});
+    await AsyncStorage.multiRemove([MISSED_ACK_STORAGE_KEY, 'drawer-empty-notified-1', 'drawer-empty-notified-2']).catch(() => {});
     acknowledgedMissedRef.current = [];
     setAcknowledgedMissedKeys([]);
     presentedOccurrences.current.clear();
@@ -483,6 +508,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(
     () => ({
       drawers,
+      restockTimes,
       reminders,
       doseHistory,
       missedDoseCount: missedDoseEvents.length,
@@ -504,6 +530,7 @@ export function RemindersProvider({ children }: { children: React.ReactNode }) {
     }),
     [
       drawers,
+      restockTimes,
       reminders,
       doseHistory,
       missedDoseEvents.length,

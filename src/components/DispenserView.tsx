@@ -8,11 +8,8 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { Reminder, AmPm, DoseEvent } from '../types/reminder';
-import { loadDrawerRestockTimes } from '../services/storage';
 import { calculateDoseOccurrence, drawerNeedsRestock } from '../services/medicationLogic';
 import { Ionicons } from '@expo/vector-icons';
-import { useReminders } from '../hooks/useReminders';
-import DrawerStatusBanner from './DrawerStatusBanner';
 import CompartmentDetailModal from './CompartmentDetailModal';
 
 const CELL_H      = 88;               // Cell height
@@ -24,6 +21,13 @@ const SLOTS       = COL_COUNT * ROW_COUNT; // 21 slots per drawer
 
 const COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
 const ROWS = ['1', '2', '3'];
+
+const statusColors = {
+  Scheduled: '#76FF03',
+  Taken: '#F97316',
+  Missed: '#FF5252',
+  Empty: '#9CA3AF',
+};
 
 // ─── Pulsing LED ─────────────────────────────────────────────────────────────
 function LED({ active, isOutOfStock, isMissed, isTaken }: { active: boolean; isOutOfStock?: boolean; isMissed?: boolean; isTaken?: boolean }) {
@@ -44,15 +48,15 @@ function LED({ active, isOutOfStock, isMissed, isTaken }: { active: boolean; isO
   }, [active, isOutOfStock, ring, ringO]);
 
   const DOT = 8;
-  const pulseColor = isOutOfStock ? '#9CA3AF' : isTaken ? '#F97316' : isMissed || isOutOfStock ? '#EF4444' : '#4CAF50';
-  const dotColor = isOutOfStock ? '#9CA3AF' : isTaken ? '#F97316' : isMissed || isOutOfStock ? '#FF5252' : '#76FF03';
+  const dotColor = isOutOfStock ? statusColors.Empty : isTaken ? statusColors.Taken :
+    isMissed ? statusColors.Missed : statusColors.Scheduled;
 
   return (
     <View style={{ width: DOT, height: DOT, alignItems: 'center', justifyContent: 'center' }} pointerEvents="none">
       <Animated.View style={{
         position: 'absolute',
         width: DOT, height: DOT, borderRadius: DOT / 2,
-        backgroundColor: pulseColor,
+        backgroundColor: dotColor,
         transform: [{ scale: ring }],
         opacity: ringO,
       }} />
@@ -292,6 +296,10 @@ function DrawerPanel({ index, allReminders, doseHistory, restockTimes, onOpenSet
         </TouchableOpacity>
       </View>
 
+      {allDrawerMedicineTaken && (
+        <Text accessibilityLiveRegion="polite" style={s.emptyNotice}>No medicine left. Refill the saved compartments.</Text>
+      )}
+
       {/* Expandable grid with visible overflow when open for flawless Android touch response */}
       <Animated.View style={{ height: anim, overflow: open ? 'visible' : 'hidden' }}>
         {/* Column letters */}
@@ -362,24 +370,19 @@ function DrawerPanel({ index, allReminders, doseHistory, restockTimes, onOpenSet
 // ─── Export ───────────────────────────────────────────────────────────────────
 export default function DispenserView({
   reminders,
+  restockTimes,
   doseHistory,
   onDeleteReminder,
   onOpenSetSchedule,
   onOpenRestock,
 }: {
   reminders: Reminder[];
+  restockTimes: Record<string, number>;
   doseHistory?: DoseEvent[];
   onDeleteReminder?: (id: string) => void;
   onOpenSetSchedule?: (params: CompartmentScheduleParams) => void;
   onOpenRestock?: (drawer: 1 | 2) => void;
 }) {
-  const { drawers } = useReminders();
-  const [restockTimes, setRestockTimes] = useState<Record<string, number>>({});
-  useEffect(() => {
-    let cancelled = false;
-    void loadDrawerRestockTimes().then(times => { if (!cancelled) setRestockTimes(times); });
-    return () => { cancelled = true; };
-  }, [reminders, doseHistory]);
   const [selectedCell, setSelectedCell] = useState<{
     drawerIndex: number;
     col: string;
@@ -389,9 +392,15 @@ export default function DispenserView({
 
   return (
     <View style={{ marginBottom: 16, width: '100%' }}>
-      <DrawerStatusBanner drawers={drawers} />
-      <Text style={{ color: '#9A3412', marginVertical: 6 }}>Orange = taken · Gray = all drawer medicine taken</Text>
       <Text style={s.sectionLbl}>DISPENSER COMPARTMENTS (TAP CELL TO ADD)</Text>
+      <View style={s.legend}>
+        {Object.entries(statusColors).map(([label, color]) => (
+          <View key={label} style={s.legendItem}>
+            <View style={[s.legendDot, { backgroundColor: color }]} />
+            <Text>{label}</Text>
+          </View>
+        ))}
+      </View>
       <DrawerPanel
         index={0}
         allReminders={reminders}
@@ -430,6 +439,10 @@ export default function DispenserView({
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
+  emptyNotice: { color: '#FFF', paddingHorizontal: 12, paddingVertical: 6 },
+  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginVertical: 8 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  legendDot: { width: 10, height: 10, borderRadius: 5 },
   sectionLbl: {
     alignSelf: 'flex-start',
     fontSize: 11, fontWeight: '700', color: '#9E9E9E',

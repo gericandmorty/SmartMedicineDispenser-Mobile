@@ -193,7 +193,9 @@ export async function sqliteUpdateSyncStatus(id: string, syncStatus: ScheduleCon
  */
 export async function sqliteLoadDoseHistory(): Promise<DoseEvent[]> {
   const db = await getDatabase();
-  const rows = await db.getAllAsync<any>('SELECT * FROM dose_history ORDER BY targetTriggerEpoch DESC LIMIT 100');
+  const rows = await db.getAllAsync<any>(`SELECT * FROM dose_history
+     WHERE rowid IN (SELECT MAX(rowid) FROM dose_history GROUP BY scheduleId, triggerDate)
+     ORDER BY targetTriggerEpoch DESC LIMIT 100`);
   return rows.map((r) => ({
     eventId: r.eventId,
     scheduleId: r.scheduleId,
