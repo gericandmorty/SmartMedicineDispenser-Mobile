@@ -45,7 +45,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "node --experimental-strip-types --test tests/medicationLogic.test.ts"
+    "test": "node --experimental-strip-types --test tests/medicationLogic.test.ts tests/drawerAlerts.test.ts"
   },
   "private": true,
   "packageManager": "bun@1.4.4"

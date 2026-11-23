@@ -25,9 +25,9 @@ export const DEFAULT_CHANNEL_ID = 'medicine-reminders';
 // Safe initialization of notification handler
 try {
   setNotificationHandler({
-    handleNotification: async () => ({
+    handleNotification: async notification => ({
       shouldShowAlert: true,
-      shouldPlaySound: true,
+      shouldPlaySound: notification.request.content.title !== '⚠️ Medicine Dosage Missed',
       shouldSetBadge: false,
       shouldShowBanner: true,
       shouldShowList: true,
@@ -205,7 +205,7 @@ export async function triggerImmediateRestockNotification(
 }
 
 /**
- * Fires an immediate local push notification alerting that a scheduled dosage was missed (20 minutes passed)
+ * Fires an immediate local notification when a dose is missed after five minutes.
  */
 export async function triggerImmediateMissedNotification(
   compartment: string
@@ -217,8 +217,8 @@ export async function triggerImmediateMissedNotification(
     const id = await scheduleNotificationAsync({
       content: {
         title: '⚠️ Medicine Dosage Missed',
-        body: `20 minutes have passed without intake. Your dose for ${compartment} has been recorded as missed.`,
-        sound: true,
+        body: `Your dose for ${compartment} has been recorded as missed. Medicine is still waiting.`,
+        sound: false,
       },
       trigger: null, // triggers immediately
     });
@@ -244,4 +244,56 @@ export async function reconcileMedicineNotifications(reminders: Reminder[]): Pro
     if (!scheduled.some((n) => n.identifier === reminder.id)) await scheduleReminderNotification(reminder);
   }
   if (!reminders.length) await dismissAllNotificationsAsync();
+}
+
+/** Live drawer alerts require fresh sensor readings while the app is active. */
+export async function triggerDrawerNotification(drawer: number, overdue: boolean): Promise<void> {
+  if (Platform.OS === 'web') return;
+  await ensureNotificationChannel();
+  const permission = await getPermissionsAsync();
+  if (permission.status !== 'granted') return; // The in-app warning works without permission.
+  await scheduleNotificationAsync({
+    identifier: `drawer-${drawer}-open`,
+    content: {
+      title: overdue ? `Drawer ${drawer} left open` : `Drawer ${drawer} is open`,
+      body: overdue ? 'The drawer has been open for at least one minute. Please close it.' : 'Please close the drawer after collecting your medicine.',
+      sound: true,
+    },
+    trigger: Platform.OS === 'android' ? { channelId: DEFAULT_CHANNEL_ID } : null,
+  });
+}
+
+export async function notifyEmptyDrawer(drawer: 1 | 2): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  await ensureNotificationChannel();
+  if ((await getPermissionsAsync()).status !== 'granted') return false;
+  await scheduleNotificationAsync({
+    identifier: `drawer-${drawer}-empty`,
+    content: {
+      title: `No medicine left in Drawer ${drawer}`,
+      body: 'Refill the saved compartments and confirm the refill in the app.',
+      sound: true,
+    },
+    trigger: Platform.OS === 'android' ? { channelId: DEFAULT_CHANNEL_ID } : null,
+  });
+  return true;
+}
+
+export async function triggerDrawerCompleteNotification(drawer: 1 | 2): Promise<void> {
+  if (Platform.OS === 'web') return;
+  await ensureNotificationChannel();
+  if ((await getPermissionsAsync()).status !== 'granted') return;
+  await scheduleNotificationAsync({
+    content: {
+      title: `Drawer ${drawer} medicine taken`,
+      body: `All due medicine in Drawer ${drawer} has been recorded as taken.`,
+      sound: true,
+    },
+    trigger: Platform.OS === 'android' ? { channelId: DEFAULT_CHANNEL_ID } : null,
+  });
+}
+
+/** Silence future scheduled medicine alerts while a missed dose needs review. */
+export async function suspendScheduledMedicineNotifications(reminders: Reminder[]): Promise<void> {
+  await Promise.all(reminders.map(reminder => cancelScheduledNotificationAsync(reminder.id).catch(() => {})));
 }

@@ -4,6 +4,7 @@ import {
   resolveBulkSchedule,
   matchesSchedulePicker,
   hardwareEventMatchesOccurrence,
+  findHardwareDoseEvent,
   hardwareConfirmsActiveOccurrence,
   shouldPresentDoseAlert,
   to24Hour,
@@ -99,8 +100,8 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
     });
   });
 
-  // ── Test Suite 2: Alert & 20-Minute Countdown Logic ─────────────────────
-  describe('Suite 2: Alert & 20-Minute Countdown Logic', () => {
+  // ── Test Suite 2: Alert & 5-Minute Countdown Logic ──────────────────────
+  describe('Suite 2: Alert & 5-Minute Countdown Logic', () => {
     const reminder: Reminder = {
       id: 'sch_alert_test',
       hour: 11,
@@ -122,29 +123,28 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
       assert.strictEqual(result.elapsedSeconds, 0);
     });
 
-    it('TC-2.2: transitions to ALERTING with full 20m (1200s) at exact scheduled time', () => {
+    it('TC-2.2: transitions to ALERTING with full 5m (300s) at exact scheduled time', () => {
       // Exactly 11:00 AM
       const now = new Date(2026, 9, 20, 11, 0, 0).getTime();
       const result = calculateDoseOccurrence(reminder, now);
 
       assert.strictEqual(result.state, 'ALERTING');
       assert.strictEqual(result.elapsedSeconds, 0);
-      assert.strictEqual(result.remainingSeconds, GRACE_PERIOD_SECONDS); // 1200s
+      assert.strictEqual(result.remainingSeconds, GRACE_PERIOD_SECONDS); // 300s
     });
 
-    it('TC-2.3: maintains accurate countdown across app restarts (e.g. at minute 7)', () => {
-      // 11:07 AM (7 minutes into 20-min window)
-      const now = new Date(2026, 9, 20, 11, 7, 0).getTime();
+    it('TC-2.3: maintains accurate countdown across app restarts (e.g. at minute 3)', () => {
+      // 11:03 AM (3 minutes into 5-minute window)
+      const now = new Date(2026, 9, 20, 11, 3, 0).getTime();
       const result = calculateDoseOccurrence(reminder, now);
 
       assert.strictEqual(result.state, 'ALERTING');
-      assert.strictEqual(result.elapsedSeconds, 7 * 60); // 420s
-      assert.strictEqual(result.remainingSeconds, 13 * 60); // 780s
+      assert.strictEqual(result.elapsedSeconds, 3 * 60);
+      assert.strictEqual(result.remainingSeconds, 2 * 60);
     });
 
-    it('TC-2.4: transitions to MISSED immediately after 20 minutes (e.g. at minute 21)', () => {
-      // 11:21 AM (21 minutes after 11:00 AM)
-      const now = new Date(2026, 9, 20, 11, 21, 0).getTime();
+    it('TC-2.4: transitions to MISSED at the five-minute cutoff', () => {
+      const now = new Date(2026, 9, 20, 11, 5, 0).getTime();
       const result = calculateDoseOccurrence(reminder, now);
 
       assert.strictEqual(result.state, 'MISSED');
@@ -246,7 +246,7 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
           scheduledTimeFormatted: '11:00 AM',
           targetTriggerEpoch: 1792494000,
           resolution: 'MISSED',
-          elapsedSeconds: 1200,
+          elapsedSeconds: 300,
         },
       ];
 
@@ -257,9 +257,9 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
           triggerDate: '2026-10-20',
           scheduledTimeFormatted: '11:00 AM',
           targetTriggerEpoch: 1792494000,
-          resolvedAtEpoch: 1792494360, // taken at minute 6 on hardware
+          resolvedAtEpoch: 1792494180, // taken at minute 3 on hardware
           resolution: 'TAKEN',
-          elapsedSeconds: 360,
+          elapsedSeconds: 180,
         },
       ];
 
@@ -267,29 +267,29 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
 
       assert.strictEqual(reconciled.length, 1);
       assert.strictEqual(reconciled[0].resolution, 'TAKEN');
-      assert.strictEqual(reconciled[0].elapsedSeconds, 360);
+      assert.strictEqual(reconciled[0].elapsedSeconds, 180);
     });
 
-    it('TC-4.2: handles midnight date rollover correctly across 11:55 PM to 12:15 AM', () => {
+    it('TC-4.2: handles midnight date rollover correctly across 11:58 PM to 12:03 AM', () => {
       const lateReminder: Reminder = {
         id: 'sch_midnight',
         hour: 11,
-        minute: 55,
+        minute: 58,
         amPm: 'PM',
         recurrence: 'every-day',
         createdAt: new Date().toISOString(),
       };
 
-      // Target trigger: 2026-10-20 23:55:00
-      // Current time: 2026-10-21 00:05:00 (10 minutes after midnight)
-      const now = new Date(2026, 9, 21, 0, 5, 0).getTime();
-      // On Oct 21 at 00:05, target trigger for today's date would be Oct 21 23:55.
+      // Target trigger: 2026-10-20 23:58:00
+      // Current time: 2026-10-21 00:00:00 (2 minutes after trigger)
+      const now = new Date(2026, 9, 21, 0, 0, 0).getTime();
+      // On Oct 21 at 00:00, today's target would still be in the future.
       // But if checking the dose occurrence starting from Oct 20:
-      const targetYesterday = new Date(2026, 9, 20, 23, 55, 0).getTime();
-      const elapsed = Math.floor((now - targetYesterday) / 1000); // 10 minutes = 600s
+      const targetYesterday = new Date(2026, 9, 20, 23, 58, 0).getTime();
+      const elapsed = Math.floor((now - targetYesterday) / 1000);
 
-      assert.strictEqual(elapsed, 600);
-      assert.strictEqual(GRACE_PERIOD_SECONDS - elapsed, 600); // 10 minutes remaining
+      assert.strictEqual(elapsed, 120);
+      assert.strictEqual(GRACE_PERIOD_SECONDS - elapsed, 180);
       assert.ok(elapsed > 0);
     });
 
@@ -486,16 +486,16 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
       const t2 = new Date(2026, 9, 20, 11, 0, 0).getTime();
       const s2 = calculateDoseOccurrence(dailySchedule, t2, history);
       assert.strictEqual(s2.state, 'ALERTING');
-      assert.strictEqual(s2.remainingSeconds, 1200);
+      assert.strictEqual(s2.remainingSeconds, 300);
 
-      // 3. At 11:08 AM: Mid-countdown
-      const t3 = new Date(2026, 9, 20, 11, 8, 0).getTime();
+      // 3. At 11:03 AM: Mid-countdown
+      const t3 = new Date(2026, 9, 20, 11, 3, 0).getTime();
       const s3 = calculateDoseOccurrence(dailySchedule, t3, history);
       assert.strictEqual(s3.state, 'ALERTING');
-      assert.strictEqual(s3.elapsedSeconds, 480);
-      assert.strictEqual(s3.remainingSeconds, 720);
+      assert.strictEqual(s3.elapsedSeconds, 180);
+      assert.strictEqual(s3.remainingSeconds, 120);
 
-      // 4. At 11:08 AM: User retrieves medicine -> TAKEN logged
+      // 4. At 11:03 AM: User retrieves medicine -> TAKEN logged
       history.push({
         eventId: 'evt_lc_1',
         scheduleId: dailySchedule.id,
@@ -504,10 +504,10 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
         targetTriggerEpoch: Math.floor(t2 / 1000),
         resolvedAtEpoch: Math.floor(t3 / 1000),
         resolution: 'TAKEN',
-        elapsedSeconds: 480,
+        elapsedSeconds: 180,
       });
 
-      // 5. At 11:15 AM (still inside original 20-min window): Remains TAKEN
+      // 5. At 11:15 AM: Recorded intake remains TAKEN after the window.
       const t4 = new Date(2026, 9, 20, 11, 15, 0).getTime();
       const s4 = calculateDoseOccurrence(dailySchedule, t4, history);
       assert.strictEqual(s4.state, 'TAKEN');
@@ -672,11 +672,11 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
     });
   });
 
-  // ── Test Suite 7: 20-Minute Missed Dose Evaluation & Schedule Deletion Cleanliness ─────────
-  describe('Suite 7: 20-Minute Missed Dose Evaluation & Schedule Deletion Cleanliness', () => {
-    it('TC-7.1: marks dosage as MISSED when 20 minutes (1200 seconds) have elapsed', () => {
+  // ── Test Suite 7: 5-Minute Missed Dose Evaluation & Schedule Deletion Cleanliness ─────────
+  describe('Suite 7: 5-Minute Missed Dose Evaluation & Schedule Deletion Cleanliness', () => {
+    it('TC-7.1: marks dosage as MISSED when five minutes (300 seconds) have elapsed', () => {
       const reminder: Reminder = {
-        id: 'sch_20m_test',
+        id: 'sch_5m_test',
         hour: 10,
         minute: 0,
         amPm: 'AM',
@@ -685,18 +685,16 @@ describe('Medication Logic Verification Test Suite (mobile_logic_verification_sp
         createdAt: '2026-10-20T08:00:00Z',
       };
 
-      // Exactly 10:20:00 AM (20 minutes on the dot)
-      const exactly20m = new Date(2026, 9, 20, 10, 20, 0).getTime();
-      const sAlerting = calculateDoseOccurrence(reminder, exactly20m);
+      const justBeforeCutoff = new Date(2026, 9, 20, 10, 4, 59).getTime();
+      const sAlerting = calculateDoseOccurrence(reminder, justBeforeCutoff);
       assert.strictEqual(sAlerting.state, 'ALERTING');
-      assert.strictEqual(sAlerting.remainingSeconds, 0);
+      assert.strictEqual(sAlerting.remainingSeconds, 1);
 
-      // 10:20:01 AM (20 minutes and 1 second - past grace period)
-      const past20m = new Date(2026, 9, 20, 10, 20, 1).getTime();
-      const sMissed = calculateDoseOccurrence(reminder, past20m);
+      const atCutoff = new Date(2026, 9, 20, 10, 5, 0).getTime();
+      const sMissed = calculateDoseOccurrence(reminder, atCutoff);
       assert.strictEqual(sMissed.state, 'MISSED');
       assert.strictEqual(sMissed.remainingSeconds, 0);
-      assert.strictEqual(sMissed.elapsedSeconds, 1200);
+      assert.strictEqual(sMissed.elapsedSeconds, 300);
     });
 
     it('TC-7.2: filters out dose history when schedule is deleted to prevent stale database state', () => {
@@ -807,6 +805,19 @@ describe('Foreground reconciliation and bulk picker', () => {
     assert.equal(hardwareEventMatchesOccurrence(reminder, {...event, triggerDate: '2026-11-03'}, trigger + 60000), false);
     assert.equal(hardwareEventMatchesOccurrence(reminder, {...event, targetTriggerEpoch: trigger/1000-60}, trigger + 60000), false);
   });
+  it('applies the newest missed result to recurring and one-time, single and bulk doses', () => {
+    for (const recurrence of ['every-day', 'once'] as const) {
+      for (const bulkSlots of [[0], [0, 7, 14]]) {
+        const dose = { ...reminder, recurrence, date: recurrence === 'once' ? reminder.date : undefined, bulkSlots };
+        const missed = { ...event, resolution: 'MISSED' as const, elapsedSeconds: 300 };
+        const events = [missed, event];
+        const now = trigger + 300000;
+        assert.equal(findHardwareDoseEvent(dose, events, now), missed);
+        const updated = reconcileHardwareEvents([event], events);
+        assert.equal(calculateDoseOccurrence(dose, now, updated).state, 'MISSED');
+      }
+    }
+  });
   it('matches grouped hardware events by complete drawer slots, never another drawer', () => {
     const grouped = {...event, scheduleId: 'other', compartment: 'Drawer 1 (A1, A2, A3); Drawer 2 (B1, B2, B3)'};
     assert.equal(hardwareEventMatchesOccurrence(reminder, grouped, trigger+60000), true);
@@ -843,13 +854,13 @@ describe('Live alarm versus reopening the app', () => {
   });
   it('does not replay an unverified alarm that became due while the app was away', () => {
     assert.equal(shouldPresentDoseAlert(reminder, [], due+30000, null, due+31000), false);
-    const status = { status: 'online' as const, device_time: '2026-11-04 00:45:31', active_alert: { is_alerting: true, schedule_id: 'normal', compartment: 'Drawer 1 (A1)', slot_index: 0, relay_num: 1, elapsed_seconds: 31, remaining_seconds: 1169 } };
+    const status = { status: 'online' as const, device_time: '2026-11-04 00:45:31', active_alert: { is_alerting: true, schedule_id: 'normal', compartment: 'Drawer 1 (A1)', slot_index: 0, relay_num: 1, elapsed_seconds: 31, remaining_seconds: 269 } };
     assert.equal(shouldPresentDoseAlert(reminder, [], due+30000, status, due+31000), true);
   });
   it('never shows a dose already recorded as taken or past its grace period', () => {
     const event: DoseEvent = { eventId: 'taken', scheduleId: 'normal', triggerDate: '2026-11-04', scheduledTimeFormatted: '', targetTriggerEpoch: due/1000, resolution: 'TAKEN' };
     assert.equal(shouldPresentDoseAlert(reminder, [event], due-60000, null, due+30000), false);
-    assert.equal(shouldPresentDoseAlert(reminder, [], due-60000, null, due+1200001), false);
+    assert.equal(shouldPresentDoseAlert(reminder, [], due-60000, null, due+300000), false);
   });
 });
 
@@ -874,4 +885,32 @@ describe('Saving a minute-only schedule for now', () => {
     const event: DoseEvent = { eventId: 'taken-now', scheduleId: reminder.id, triggerDate: reminder.date!, targetTriggerEpoch: due/1000, scheduledTimeFormatted: '01:25 AM', resolution: 'TAKEN' };
     assert.equal(shouldPresentDoseAlert(reminder, [event], due+5000, null, due+11000), false);
   });
+});
+
+
+test('one medicine on a specific date uses only its selected slot and does not repeat', () => {
+  const medicine: Reminder = {
+    id: 'one-date', hour: 9, minute: 30, amPm: 'AM', recurrence: 'once',
+    date: '2026-11-20', createdAt: '', compartment: 'Drawer 2 (C2)', slotIndex: 30, isBulk: false,
+  };
+  assert.deepEqual(resolveBulkSchedule(medicine)?.slots, [30]);
+  const due = new Date(2026, 10, 20, 9, 30).getTime();
+  assert.equal(computeTargetTriggerEpoch(medicine, new Date(2026, 10, 21)), due);
+  assert.equal(calculateDoseOccurrence(medicine, due).state, 'ALERTING');
+  assert.notEqual(calculateDoseOccurrence(medicine, new Date(2026, 10, 21, 9, 30).getTime()).state, 'ALERTING');
+  assert.equal(validateScheduleConflict({ ...medicine, id: 'another-day', date: '2026-11-21' }, [medicine]).hasConflict, false);
+  assert.equal(validateScheduleConflict({ ...medicine, id: 'same-day', hour: 10 }, [medicine]).hasConflict, true);
+});
+
+
+test('one medicine per cell becomes empty after one taken dose', () => {
+  const reminder: Reminder = { id: 'quantity', hour: 9, minute: 0, amPm: 'AM', recurrence: 'once',
+    date: '2026-11-20', createdAt: '2026-11-18T00:00:00', compartment: 'Drawer 1 (A1)', slotIndex: 0, quantity: 1 };
+  const events: DoseEvent[] = [
+    { eventId: 'first', scheduleId: reminder.id, triggerDate: '2026-11-20', scheduledTimeFormatted: '', targetTriggerEpoch: 0, resolution: 'TAKEN' },
+    { eventId: 'second', scheduleId: reminder.id, triggerDate: '2026-11-21', scheduledTimeFormatted: '', targetTriggerEpoch: 0, resolution: 'TAKEN_MANUAL' },
+  ];
+  assert.equal(calculateColumnStock(reminder, [], undefined, undefined, new Date(2026, 10, 21)).remainingDoses, 1);
+  assert.equal(calculateColumnStock(reminder, events.slice(0, 1)).remainingDoses, 0);
+  assert.equal(calculateColumnStock(reminder, events).isOutOfStock, true);
 });

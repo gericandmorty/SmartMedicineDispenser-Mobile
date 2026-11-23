@@ -29,6 +29,7 @@ import { triggerImmediateRestockNotification } from './notifications';
 const REMINDERS_STORAGE_KEY = '@medicine_reminders';
 const DOSE_HISTORY_STORAGE_KEY = '@medicine_dose_history';
 const COLUMN_REFILLS_STORAGE_KEY = '@medicine_column_refills';
+const DRAWER_RESTOCK_STORAGE_KEY = '@medicine_drawer_restock_times';
 const MIGRATION_FLAG_KEY = '@sqlite_migrated_v2';
 
 /**
@@ -44,7 +45,7 @@ export async function loadReminders(): Promise<Reminder[]> {
     // Only on initial fresh upgrade check AsyncStorage for legacy migration
     const json = await AsyncStorage.getItem(REMINDERS_STORAGE_KEY);
     if (json) {
-      const items = JSON.parse(json) as Reminder[];
+      const items = (JSON.parse(json) as Reminder[]).map(item => ({ ...item, quantity: 1 }));
       for (const item of items) {
         await sqliteSaveReminder(item).catch(() => {});
       }
@@ -56,7 +57,7 @@ export async function loadReminders(): Promise<Reminder[]> {
   } catch {
     try {
       const json = await AsyncStorage.getItem(REMINDERS_STORAGE_KEY);
-      return json ? (JSON.parse(json) as Reminder[]) : [];
+      return json ? (JSON.parse(json) as Reminder[]).map(item => ({ ...item, quantity: 1 })) : [];
     } catch {
       return [];
     }
@@ -69,11 +70,11 @@ export async function loadReminders(): Promise<Reminder[]> {
 export async function saveReminders(reminders: Reminder[]): Promise<void> {
   try {
     for (const r of reminders) {
-      await sqliteSaveReminder(r).catch(() => {});
+      await sqliteSaveReminder({ ...r, quantity: 1 }).catch(() => {});
     }
   } catch {}
   try {
-    await AsyncStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(reminders));
+    await AsyncStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(reminders.map(item => ({ ...item, quantity: 1 }))));
   } catch {}
 }
 
@@ -84,6 +85,7 @@ export async function addReminder(reminder: Reminder): Promise<Reminder[]> {
   const existing = await loadReminders();
   const reminderWithSync: Reminder = {
     ...reminder,
+    quantity: 1,
     syncStatus: reminder.syncStatus ?? 'SYNC_PENDING',
   };
 
@@ -239,7 +241,7 @@ export async function recordDoseResolution(
   const elapsedSeconds = Math.max(0, resolvedAtEpochSec - targetTriggerEpochSec);
 
   const event: DoseEvent = {
-    eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    eventId: `dose_${reminder.id}_${triggerDate}`,
     scheduleId: reminder.id,
     compartment: reminder.compartment,
     slotIndex: reminder.slotIndex,
@@ -269,20 +271,6 @@ export async function recordDoseResolution(
   }
   const trimmed = history.slice(0, 100);
   await AsyncStorage.setItem(DOSE_HISTORY_STORAGE_KEY, JSON.stringify(trimmed)).catch(() => {});
-
-  // If dose was taken, check if column is now out of stock (0/7 remaining)
-  if (resolution === 'TAKEN' || resolution === 'TAKEN_MANUAL') {
-    try {
-      const coords = extractCompartmentCoords(reminder.compartment, reminder.slotIndex);
-      const refillMap = await loadColumnRefills();
-      const key = `${coords.drawer}_${coords.column}`;
-      const refillDate = refillMap[key];
-      const stock = calculateColumnStock(reminder, trimmed, 7, refillDate);
-      if (stock.isOutOfStock) {
-        await triggerImmediateRestockNotification(coords.drawer, coords.column);
-      }
-    } catch {}
-  }
 
   return event;
 }
@@ -332,7 +320,7 @@ export async function recordColumnRefill(
 /**
  * Computes current stock status for all active schedules grouped by column
  */
-export async function getColumnStockList(cycleDays: number = 7): Promise<ColumnStockStatus[]> {
+export async function getColumnStockList(): Promise<ColumnStockStatus[]> {
   const [reminders, history, refillMap] = await Promise.all([
     loadReminders(),
     loadDoseHistory(),
@@ -349,7 +337,7 @@ export async function getColumnStockList(cycleDays: number = 7): Promise<ColumnS
     processedKeys.add(key);
 
     const refillDate = refillMap[key];
-    const status = calculateColumnStock(reminder, history, cycleDays, refillDate);
+    const status = calculateColumnStock(reminder, history, 1, refillDate);
     results.push(status);
   }
 
@@ -415,7 +403,25 @@ export async function clearAllMedicineData(): Promise<void> {
     REMINDERS_STORAGE_KEY,
     DOSE_HISTORY_STORAGE_KEY,
     COLUMN_REFILLS_STORAGE_KEY,
+    DRAWER_RESTOCK_STORAGE_KEY,
   ]).catch(() => {});
   // Mark migrated so stale data is never revived
   await AsyncStorage.setItem(MIGRATION_FLAG_KEY, 'true').catch(() => {});
+}
+
+export async function loadDrawerRestockTimes(): Promise<Record<string, number>> {
+  try {
+    const raw = await AsyncStorage.getItem(DRAWER_RESTOCK_STORAGE_KEY);
+    return raw ? JSON.parse(raw) as Record<string, number> : {};
+  } catch { return {}; }
+}
+
+export async function recordDrawerRestock(drawer: 1 | 2, columns: string[]): Promise<number> {
+  const now = Date.now();
+  // Save the refill baseline for every previously scheduled column in this drawer.
+  await Promise.all(columns.map(column => recordColumnRefill(drawer, column)));
+  const times = await loadDrawerRestockTimes();
+  times[String(drawer)] = now;
+  await AsyncStorage.setItem(DRAWER_RESTOCK_STORAGE_KEY, JSON.stringify(times));
+  return now;
 }

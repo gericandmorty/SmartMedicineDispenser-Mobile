@@ -28,6 +28,7 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
         date TEXT,
         compartment TEXT,
         slotIndex INTEGER,
+        quantity INTEGER,
         syncStatus TEXT,
         createdAt TEXT
       );
@@ -69,6 +70,10 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
       await db.execAsync(`ALTER TABLE reminders ADD COLUMN bulkCompartments TEXT;`);
     } catch {}
 
+    try { await db.execAsync(`ALTER TABLE reminders ADD COLUMN quantity INTEGER;`); } catch {}
+
+    // Legacy schedules used seven doses. Every saved cell now holds exactly one.
+    await db.execAsync('UPDATE reminders SET quantity = 1 WHERE quantity IS NULL OR quantity <> 1;');
     dbInstance = db;
     return db;
   })();
@@ -103,6 +108,7 @@ export async function sqliteLoadReminders(): Promise<Reminder[]> {
       date: r.date || undefined,
       compartment: r.compartment || undefined,
       slotIndex: r.slotIndex !== null ? r.slotIndex : undefined,
+      quantity: 1,
       syncStatus: r.syncStatus || 'SYNC_PENDING',
       createdAt: r.createdAt || undefined,
       isBulk: isBulk ? true : undefined,
@@ -123,8 +129,8 @@ export async function sqliteSaveReminder(reminder: Reminder): Promise<void> {
 
   try {
     await db.runAsync(
-      `INSERT OR REPLACE INTO reminders (id, hour, minute, second, amPm, recurrence, date, compartment, slotIndex, syncStatus, createdAt, isBulk, bulkSlots, bulkCompartments)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO reminders (id, hour, minute, second, amPm, recurrence, date, compartment, slotIndex, syncStatus, createdAt, isBulk, bulkSlots, bulkCompartments, quantity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         reminder.id,
         reminder.hour,
@@ -140,6 +146,7 @@ export async function sqliteSaveReminder(reminder: Reminder): Promise<void> {
         isBulkVal,
         bulkSlotsVal,
         bulkCompVal,
+        1,
       ]
     );
   } catch {
@@ -186,7 +193,9 @@ export async function sqliteUpdateSyncStatus(id: string, syncStatus: ScheduleCon
  */
 export async function sqliteLoadDoseHistory(): Promise<DoseEvent[]> {
   const db = await getDatabase();
-  const rows = await db.getAllAsync<any>('SELECT * FROM dose_history ORDER BY targetTriggerEpoch DESC LIMIT 100');
+  const rows = await db.getAllAsync<any>(`SELECT * FROM dose_history
+     WHERE rowid IN (SELECT MAX(rowid) FROM dose_history GROUP BY scheduleId, triggerDate)
+     ORDER BY targetTriggerEpoch DESC LIMIT 100`);
   return rows.map((r) => ({
     eventId: r.eventId,
     scheduleId: r.scheduleId,
