@@ -241,7 +241,7 @@ export async function recordDoseResolution(
   const elapsedSeconds = Math.max(0, resolvedAtEpochSec - targetTriggerEpochSec);
 
   const event: DoseEvent = {
-    eventId: `evt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    eventId: `dose_${reminder.id}_${triggerDate}`,
     scheduleId: reminder.id,
     compartment: reminder.compartment,
     slotIndex: reminder.slotIndex,

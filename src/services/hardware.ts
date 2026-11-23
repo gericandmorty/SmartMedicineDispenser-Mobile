@@ -1,4 +1,4 @@
-import { resolveBulkSchedule, hardwareEventMatchesOccurrence } from './medicationLogic';
+import { resolveBulkSchedule, findHardwareDoseEvent } from './medicationLogic';
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
@@ -337,24 +337,24 @@ export async function fetchHardwareEvents(targetIP?: string, limit: number = 10)
     if (res.ok) {
       const data = await res.json();
       const rawEvents: any[] = data.events || [];
-      return rawEvents.map((e) => ({
-        eventId: e.eventId || e.event_id || `evt_${Date.now()}`,
-        scheduleId: e.scheduleId || e.schedule_id || '',
-        compartment: e.compartment || '',
-        slotIndex: e.slotIndex ?? e.slot_index ?? 0,
-        triggerDate:
-          e.triggerDate ||
-          (e.trigger_time ? e.trigger_time.split(' ')[0] : new Date().toISOString().split('T')[0]),
-        scheduledTimeFormatted: e.scheduledTimeFormatted || e.trigger_time || '',
-        targetTriggerEpoch: e.targetTriggerEpoch ?? 0,
-        resolvedAtEpoch: e.resolvedAtEpoch ?? Math.floor(Date.now() / 1000),
-        resolution: (e.resolution?.toUpperCase() === 'TAKEN'
-          ? 'TAKEN'
-          : e.resolution?.toUpperCase() === 'MISSED'
-          ? 'MISSED'
-          : 'TAKEN') as DoseResolution,
-        elapsedSeconds: e.elapsedSeconds ?? e.elapsed_seconds ?? 0,
-      }));
+      return rawEvents.flatMap((e): DoseEvent[] => {
+        const resolution = typeof e?.resolution === 'string' ? e.resolution.toUpperCase() : '';
+        if (resolution !== 'TAKEN' && resolution !== 'MISSED' && resolution !== 'TAKEN_MANUAL') return [];
+        return [{
+          eventId: e.eventId || e.event_id || `evt_${Date.now()}`,
+          scheduleId: e.scheduleId || e.schedule_id || '',
+          compartment: e.compartment || '',
+          slotIndex: e.slotIndex ?? e.slot_index ?? 0,
+          triggerDate:
+            e.triggerDate ||
+            (e.trigger_time ? e.trigger_time.split(' ')[0] : new Date().toISOString().split('T')[0]),
+          scheduledTimeFormatted: e.scheduledTimeFormatted || e.trigger_time || '',
+          targetTriggerEpoch: e.targetTriggerEpoch ?? 0,
+          resolvedAtEpoch: e.resolvedAtEpoch ?? Math.floor(Date.now() / 1000),
+          resolution,
+          elapsedSeconds: e.elapsedSeconds ?? e.elapsed_seconds ?? 0,
+        }];
+      });
     }
     return [];
   } catch {
@@ -377,8 +377,8 @@ export async function checkHardwareDoseResolved(
   reminder: Reminder
 ): Promise<HardwareDoseCheckResult> {
   const events = await fetchHardwareEvents(await getESP32IP(), 20);
-  const event = events.find((item) => item.resolution === 'TAKEN' && hardwareEventMatchesOccurrence(reminder, item));
-  return event ? { resolved: true, resolution: 'TAKEN', elapsedSeconds: event.elapsedSeconds } : { resolved: false };
+  const event = findHardwareDoseEvent(reminder, events);
+  return event ? { resolved: true, resolution: event.resolution, elapsedSeconds: event.elapsedSeconds } : { resolved: false };
 }
 
 /**
@@ -622,16 +622,16 @@ export async function triggerBuzzerRelayTest(): Promise<boolean> {
  * @param drawer 1 (Drawer 1), 2 (Drawer 2), or 0 (Both)
  * @param unlock true to unlock/energize, false to lock/de-energize
  */
-export async function setSolenoidLock(drawer: 1 | 2 | 0 = 0, unlock: boolean): Promise<boolean> {
+export async function setSolenoidLock(drawer: 1 | 2 | 0 = 0, unlock: boolean, purpose?: 'restock'): Promise<boolean> {
   const arduinoIP = await getArduinoIP();
   const esp32IP = await getESP32IP();
   const stateStr = unlock ? 'unlock' : 'lock';
-  const query = `?drawer=${drawer}&state=${stateStr}`;
+  const query = `?drawer=${drawer}&state=${stateStr}${purpose === 'restock' ? '&restock=1' : ''}`;
 
   const sendTo = async (ip: string) => {
     if (!ip) return false;
     const ok = await nativeHttpGet(`http://${ip}/solenoid${query}`, 3000);
-    if (!ok && unlock) {
+    if (!ok && unlock && purpose !== 'restock') {
       // Fallback to /dispense endpoint if /solenoid not yet running
       return nativeHttpGet(`http://${ip}/dispense?drawer=${drawer}`, 3000);
     }

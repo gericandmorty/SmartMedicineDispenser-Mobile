@@ -263,6 +263,22 @@ export async function triggerDrawerNotification(drawer: number, overdue: boolean
   });
 }
 
+export async function notifyEmptyDrawer(drawer: 1 | 2): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+  await ensureNotificationChannel();
+  if ((await getPermissionsAsync()).status !== 'granted') return false;
+  await scheduleNotificationAsync({
+    identifier: `drawer-${drawer}-empty`,
+    content: {
+      title: `No medicine left in Drawer ${drawer}`,
+      body: 'Refill the saved compartments and confirm the refill in the app.',
+      sound: true,
+    },
+    trigger: Platform.OS === 'android' ? { channelId: DEFAULT_CHANNEL_ID } : null,
+  });
+  return true;
+}
+
 export async function triggerDrawerCompleteNotification(drawer: 1 | 2): Promise<void> {
   if (Platform.OS === 'web') return;
   await ensureNotificationChannel();

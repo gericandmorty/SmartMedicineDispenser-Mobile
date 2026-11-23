@@ -98,6 +98,7 @@ test('cabinet popup latches through disconnect and requires both explicit closed
   for (const payload of [null, {}, { drawer1_open: false }, { drawer1_open: false, drawer2_open: true }, { cabinet_close_required: false }]) {
     assert.equal(requiresCabinetClosure(true, payload), true);
   }
+  assert.equal(requiresCabinetClosure(true, { cabinet_close_required: true, drawer1_open: false, drawer2_open: false }), true);
   assert.equal(requiresCabinetClosure(true, { drawer1_open: false, drawer2_open: false }), false);
   assert.equal(requiresCabinetClosure(false, null), false);
 });
@@ -119,7 +120,10 @@ test('restock prompt requires every saved cell in a drawer and clears after refi
   assert.equal(drawerNeedsRestock(reminders, events.slice(0, 20), 1, 0, takenAt), false);
   assert.equal(drawerNeedsRestock(reminders, events, 1, 0, takenAt), true);
   assert.equal(calculateColumnStock(reminders[0], events).remainingDoses, 0);
+  assert.equal(drawerNeedsRestock(reminders, events, 1, 0, takenAt + 86400000), true);
   const restockedAt = takenAt + 1000;
+  const partialPickup = [...events, { ...events[0], resolvedAtEpoch: takenAt / 1000 + 2 }];
+  assert.equal(drawerNeedsRestock(reminders, partialPickup, 1, restockedAt, takenAt + 2000), false);
   assert.equal(drawerNeedsRestock(reminders, events, 1, restockedAt, takenAt + 2000), false);
   assert.equal(calculateColumnStock(reminders[0], events, 1, '2026-11-14', new Date(takenAt), restockedAt).remainingDoses, 1);
 });

@@ -21,34 +21,29 @@ import DispenserView, { CompartmentScheduleParams } from '../../components/Dispe
 import SetScheduleBottomSheet, { SetScheduleParams } from '../../components/SetScheduleBottomSheet';
 import { AmPm, Reminder } from '../../types/reminder';
 import { drawerNeedsRestock, resolveBulkSchedule } from '../../services/medicationLogic';
-import { loadDrawerRestockTimes, recordDrawerRestock } from '../../services/storage';
-import { setSolenoidLock, triggerBuzzerRelayTest, fetchHardwareStatus } from '../../services/hardware';
+import { recordDrawerRestock } from '../../services/storage';
+import { setSolenoidLock, fetchHardwareStatus } from '../../services/hardware';
 
 const toastFade = new Animated.Value(0);
 const toastTranslate = new Animated.Value(-30);
 
 export default function HomeScreen() {
-  const { reminders, doseHistory, drawers, missedDoseCount, openMissedReview, loading, refresh, add, remove } = useReminders();
+  const { reminders, doseHistory, restockTimes, drawers, missedDoseCount, openMissedReview, loading, refresh, add, remove } = useReminders();
   const [sheetVisible, setSheetVisible] = useState(false);
-  const [restockTimes, setRestockTimes] = useState<Record<string, number>>({});
-  const [restockTimesLoaded, setRestockTimesLoaded] = useState(false);
   const [restockSaving, setRestockSaving] = useState(false);
   const [restockUnlocked, setRestockUnlocked] = useState(false);
   const [restockError, setRestockError] = useState('');
-  const [restockVersion, setRestockVersion] = useState(0);
-  useEffect(() => { void loadDrawerRestockTimes().then(times => { setRestockTimes(times); setRestockTimesLoaded(true); }); }, [restockVersion]);
   const [restockDrawer, setRestockDrawer] = useState<1 | 2 | null>(null);
   const [editingRestockId, setEditingRestockId] = useState<string | null>(null);
   const [editHour, setEditHour] = useState('');
   const [editMinute, setEditMinute] = useState('');
   const [editAmPm, setEditAmPm] = useState<AmPm>('AM');
   const openRestock = (drawer: 1 | 2) => {
-    if (!restockTimesLoaded || loading || !drawerNeedsRestock(reminders, doseHistory, drawer, restockTimes[String(drawer)] ?? 0)) return;
+    if (loading || !drawerNeedsRestock(reminders, doseHistory, drawer, restockTimes[String(drawer)] ?? 0)) return;
     setRestockDrawer(drawer);
     setRestockError('');
     setRestockUnlocked(false);
-    void setSolenoidLock(drawer, true).then(setRestockUnlocked).catch(() => setRestockUnlocked(false));
-    void triggerBuzzerRelayTest().catch(() => {});
+    void setSolenoidLock(drawer, true, 'restock').then(setRestockUnlocked).catch(() => setRestockUnlocked(false));
   };
   const closeRestock = () => {
     if (restockSaving) return;
@@ -91,9 +86,7 @@ export default function HomeScreen() {
       const columns = [...new Set(reminders.flatMap(reminder =>
         (resolveBulkSchedule(reminder)?.slots ?? []).filter(slot => Math.floor(slot / 21) + 1 === drawer)
           .map(slot => String.fromCharCode(65 + slot % 7))))];
-      const timestamp = await recordDrawerRestock(drawer, columns);
-      setRestockTimes(previous => ({ ...previous, [String(drawer)]: timestamp }));
-      setRestockVersion(previous => previous + 1);
+      await recordDrawerRestock(drawer, columns);
       await setSolenoidLock(drawer, false).catch(() => {});
       await refresh();
       setRestockDrawer(null);
@@ -298,7 +291,7 @@ export default function HomeScreen() {
 
         {/* ── Dispenser compartment view ── */}
         <DispenserView
-          key={restockVersion}
+          restockTimes={restockTimes}
           reminders={reminders}
           doseHistory={doseHistory}
           onDeleteReminder={handleDelete}
